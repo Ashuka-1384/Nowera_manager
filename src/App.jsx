@@ -9,7 +9,7 @@ import {
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import {
   DEPARTMENTS, ROLE_LABELS, PROJECT_STATUS, TASK_STATUS, PRIORITY, REQUEST_STATUS,
-  normalizePhone, getDepartment, initials, faDate, isManager,
+  normalizePhone, phoneToAuthEmail, getDepartment, initials, faDate, isManager,
 } from './lib/helpers';
 
 const EMPTY_DATA = { profiles: [], publicMembers: [], projects: [], tasks: [], events: [], reports: [], projectMembers: [], taskMembers: [] };
@@ -326,17 +326,21 @@ function AuthModal({ mode, setMode, close, notify }) {
     setBusy(true);
     try {
       let result;
+      // The UI still asks for a phone number, but Supabase Auth uses a
+      // deterministic non-deliverable email alias so no SMS provider is needed.
+      const authEmail = phoneToAuthEmail(phone);
       if (isSignup) {
         result = await supabase.auth.signUp({
-          phone, password: form.password,
-          options: { data: { full_name: form.full_name.trim(), department: form.department } },
+          email: authEmail,
+          password: form.password,
+          options: { data: { full_name: form.full_name.trim(), department: form.department, phone } },
         });
       } else {
-        result = await supabase.auth.signInWithPassword({ phone, password: form.password });
+        result = await supabase.auth.signInWithPassword({ email: authEmail, password: form.password });
       }
       if (result.error) return notify(explainAuthError(result.error), 'error');
       if (isSignup && !result.data.session) {
-        notify('حساب ایجاد شد، اما ورود فوری فعال نیست. در Supabase بخش Authentication، تأیید شماره (Confirm phone) را خاموش کنید.', 'error');
+        notify('حساب ایجاد شد، اما ورود فوری فعال نیست. در Supabase بخش Authentication → Sign In / Providers → Email، گزینه Confirm email را خاموش کن.', 'error');
         return;
       }
       notify(isSignup ? 'عضویت شما در نَوِرا انجام شد؛ خوش آمدید!' : 'با موفقیت وارد شدید.');
@@ -368,9 +372,10 @@ function explainAuthError(error) {
     return 'به Supabase وصل نشدیم. آدرس VITE_SUPABASE_URL و کلید Publishable/anon را بررسی کن؛ مطمئن شو پروژه Supabase فعال است و اینترنت/VPN به supabase.co دسترسی دارد. برای بررسی دقیق در ترمینال npm run diagnose را اجرا کن.';
   }
   if (/invalid login credentials/i.test(message)) return 'شماره موبایل یا رمز عبور اشتباه است.';
-  if (/phone provider is disabled/i.test(message)) return 'ورود با شماره موبایل در Supabase فعال نشده است. Authentication → Providers → Phone را فعال کن.';
+  if (/email provider is disabled|email logins are disabled|unsupported provider.*email/i.test(message)) return 'در Supabase به Authentication → Sign In / Providers → Email برو و ورود ایمیلی را فعال کن؛ نیازی به فعال‌کردن Phone یا SMS نیست.';
   if (/password should be at least/i.test(message)) return 'رمز عبور باید حداقل ۸ کاراکتر باشد.';
   if (/user already registered|already been registered/i.test(message)) return 'این شماره قبلاً ثبت شده است؛ از بخش ورود استفاده کن.';
+  if (/email.*invalid|invalid.*email/i.test(message)) return 'Supabase شناسهٔ داخلی ورود را نپذیرفت. مطمئن شو Email provider فعال و Confirm email خاموش است؛ اگر خطا ادامه داشت متن دقیق خطا را بررسی کن.';
   if (/signups not allowed/i.test(message)) return 'ثبت‌نام عمومی در تنظیمات Auth غیرفعال است.';
   if (/rate limit/i.test(message)) return 'تعداد تلاش‌ها زیاد شده است؛ کمی بعد دوباره امتحان کن.';
   return message || 'ورود یا ثبت‌نام انجام نشد.';

@@ -1,6 +1,6 @@
 -- NOWERA Management · Supabase / PostgreSQL bootstrap
 -- Run this file in Supabase SQL Editor using the project owner. Re-running it is supported.
--- The initial super-admin is assigned only from an exact normalized owner phone match.
+-- The initial super-admin is assigned from an exact normalized owner phone match. With SMS verification off, this does not prove phone ownership.
 
 create extension if not exists pgcrypto;
 
@@ -141,15 +141,25 @@ as $$
   );
 $$;
 
--- Create each profile from Supabase Auth. Metadata can never choose the role.
+-- Create each profile from the submitted phone metadata (SMS verification is intentionally not used).
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public, auth
 as $$
 declare
   digits text;
+  phone_value text;
   dept text;
 begin
-  digits := regexp_replace(coalesce(new.phone, ''), '[^0-9]', '', 'g');
+  -- The web app authenticates with an internal email alias to avoid SMS.
+  -- The actual phone is carried in Auth user metadata and stored in profiles.
+  phone_value := coalesce(
+    nullif(trim(new.raw_user_meta_data ->> 'phone'), ''),
+    nullif(trim(new.phone), '')
+  );
+  digits := regexp_replace(coalesce(phone_value, ''), '[^0-9]', '', 'g');
+  if phone_value is null or digits = '' then
+    raise exception 'NOWERA signup requires phone metadata';
+  end if;
   dept := coalesce(new.raw_user_meta_data ->> 'department', 'Technoplus');
   if dept not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen') then dept := 'Technoplus'; end if;
 
@@ -157,7 +167,7 @@ begin
   values (
     new.id,
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'),
-    coalesce(new.phone, digits),
+    phone_value,
     dept,
     case when digits = '989333167279' then 'super_admin' else 'member' end,
     true
@@ -171,20 +181,20 @@ drop trigger if exists on_auth_user_created_nowera on auth.users;
 create trigger on_auth_user_created_nowera
 after insert on auth.users for each row execute procedure public.handle_new_user();
 
--- Backfill phone-auth accounts created before this schema/trigger was installed.
--- Email-only accounts are skipped because this app requires a phone number.
+-- Backfill existing users that have a real phone either in Auth's phone field
+-- (legacy Phone provider) or in user metadata (NOWERA's no-SMS email alias).
 insert into public.profiles (id, full_name, phone, department, role, is_active)
 select
   u.id,
   coalesce(nullif(trim(u.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'),
-  u.phone,
+  coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), u.phone),
   case
     when u.raw_user_meta_data ->> 'department' in ('Lumen', 'Atlas', 'Technoplus', 'Horizen')
       then u.raw_user_meta_data ->> 'department'
     else 'Technoplus'
   end,
   case
-    when regexp_replace(coalesce(u.phone, ''), '[^0-9]', '', 'g') = '989333167279'
+    when regexp_replace(coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), u.phone, ''), '[^0-9]', '', 'g') = '989333167279'
       then 'super_admin'
     else 'member'
   end,
@@ -192,7 +202,7 @@ select
 from auth.users u
 left join public.profiles p on p.id = u.id
 where p.id is null
-  and regexp_replace(coalesce(u.phone, ''), '[^0-9]', '', 'g') <> ''
+  and regexp_replace(coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), u.phone, ''), '[^0-9]', '', 'g') <> ''
 on conflict (id) do nothing;
 
 -- Prevent a user from self-promoting or changing their phone/section.

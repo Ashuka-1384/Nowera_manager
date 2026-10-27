@@ -12,12 +12,24 @@ export const PRIORITY = { low: 'کم', medium: 'متوسط', high: 'زیاد', u
 export const REQUEST_STATUS = { pending: 'در انتظار تأیید', approved: 'تأییدشده', rejected: 'ردشده' };
 
 export function normalizePhone(input) {
-  let value = String(input || '').replace(/[^\d+]/g, '');
+  // Accept Persian and Arabic-Indic digits as well as ASCII digits.
+  let value = String(input || '')
+    .replace(/[۰-۹]/g, (digit) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(digit)))
+    .replace(/[٠-٩]/g, (digit) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(digit)))
+    .replace(/[^\d+]/g, '');
   if (value.startsWith('0098')) value = `+${value.slice(2)}`;
   else if (value.startsWith('98') && !value.startsWith('+')) value = `+${value}`;
   else if (value.startsWith('09')) value = `+98${value.slice(1)}`;
   else if (/^9\d{9}$/.test(value)) value = `+98${value}`;
   return value;
+}
+
+// Supabase Email/Password Auth is used as the password identity so Phone/SMS
+// provider can stay disabled. This alias is not a real mailbox; confirmation
+// must be disabled in Supabase for immediate sign-up without sending email.
+export function phoneToAuthEmail(input) {
+  const digits = normalizePhone(input).replace(/[^\d]/g, '');
+  return `phone-${digits}@login.nowera.invalid`;
 }
 
 export function getDepartment(id) { return DEPARTMENTS.find((d) => d.id === id) || DEPARTMENTS[1]; }
