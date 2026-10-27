@@ -320,7 +320,7 @@ function AuthModal({ mode, setMode, close, notify }) {
     event.preventDefault();
     if (!supabase) return notify('اتصال Supabase تنظیم نشده است. ابتدا مراحل راه‌اندازی README را انجام دهید.', 'error');
     const phone = normalizePhone(form.phone);
-    if (!/^\+989\d{9}$/.test(phone)) return notify('شماره موبایل را به شکل ۰۹۱۲۳۴۵۶۷۸۹ وارد کنید.', 'error');
+    if (!/^\+989\d{9}$/.test(phone)) return notify('شماره موبایل را بدون صفر ابتدایی و به شکل 9123456789 وارد کنید.', 'error');
     if (form.password.length < 8) return notify('رمز عبور باید حداقل ۸ کاراکتر باشد.', 'error');
     if (isSignup && form.full_name.trim().length < 2) return notify('نام و نام خانوادگی را وارد کنید.', 'error');
     setBusy(true);
@@ -356,7 +356,7 @@ function AuthModal({ mode, setMode, close, notify }) {
     <div className="auth-heading"><span className="section-kicker">{isSignup ? 'BECOME A PART OF NOWERA' : 'WELCOME BACK'}</span><h2>{isSignup ? 'به نَوِرا خوش آمدی.' : 'دوباره خوش آمدی.'}</h2><p>{isSignup ? 'پروفایل خودت را بساز و مسیر همکاری را شروع کن.' : 'با شماره موبایل و رمز عبورت وارد فضای کاری شو.'}</p></div>
     <form className="auth-form" onSubmit={submit}>
       {isSignup && <label>نام و نام خانوادگی<input autoComplete="name" required minLength={2} maxLength={100} value={form.full_name} onChange={(e) => update('full_name', e.target.value)} placeholder="مثلاً آرمین رضایی" /></label>}
-      <label>شماره موبایل<div className="phone-field"><span>+98</span><input dir="ltr" inputMode="tel" autoComplete="tel" required value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="09123456789" /></div></label>
+      <label>شماره موبایل<div className="phone-field"><span>+98</span><input dir="ltr" inputMode="tel" autoComplete="tel" required value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="9123456789" /></div></label>
       <label>رمز عبور<div className="password-field"><input dir="ltr" type={showPassword ? 'text' : 'password'} autoComplete={isSignup ? 'new-password' : 'current-password'} required minLength={8} value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="حداقل ۸ کاراکتر" /><button type="button" className="password-toggle" onClick={() => setShowPassword((value) => !value)}>{showPassword ? 'پنهان' : 'نمایش'}</button></div></label>
       {isSignup && <label>بخش موردعلاقه‌ات<select value={form.department} onChange={(e) => update('department', e.target.value)}>{DEPARTMENTS.map((department) => <option value={department.id} key={department.id}>{department.name} · {department.english}</option>)}</select></label>}
       <button disabled={busy} className="button button-primary auth-submit" type="submit">{busy ? <span className="button-spinner" /> : isSignup ? <UserPlus size={17} /> : <LogIn size={17} />}{busy ? 'در حال پردازش…' : isSignup ? 'ساخت حساب و عضویت' : 'ورود به فضای کاری'}<ArrowLeft size={16} /></button>
