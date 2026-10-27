@@ -1,0 +1,89 @@
+# NOWERA Management Workspace
+
+سامانه مدیریت داخلی نَوِرا برای چهار بخش **Lumen، Technoplus، Atlas و Horizen**؛ ساخته‌شده با React، Vite، Supabase Auth و PostgreSQL. رابط فارسی و راست‌چین است.
+
+## راه‌اندازی سریع
+
+### ۱. دیتابیس Supabase را آماده کن
+
+1. در [Supabase](https://supabase.com/) یک پروژه بساز یا پروژه فعلی‌ات را باز کن.
+2. وارد **SQL Editor → New query** شو، فایل `supabase/schema.sql` این پروژه را باز کن، کل محتوایش را کپی کن و در SQL Editor اجرا کن. اسکریپت با `CREATE ... IF NOT EXISTS` و بازسازی policyها طراحی شده تا در صورت اجرای ناقص بتوانی دوباره اجرا کنی.
+3. در **Authentication → Providers / Sign In** ارائه‌دهنده‌ی **Phone** را فعال کن.
+4. در تنظیمات Authentication، گزینه‌ی **Confirm phone** را خاموش کن تا بعد از ثبت‌نام ورود فوری ممکن باشد؛ ثبت‌نام عمومی (**Allow new users to sign up**) نیز باید روشن باشد.
+5. از **Project Settings → API**، مقدار **Project URL** و کلید **Publishable** یا کلید قدیمی **anon** را بردار. کلید `service_role` یا `secret` را در این پروژه وارد نکن.
+
+### ۲. اجرا روی کامپیوتر خودت
+
+نصب [Node.js](https://nodejs.org/) نسخه ۲۰ یا جدیدتر کافی است. در ترمینال داخل پوشه پروژه این دستورات را اجرا کن:
+
+```bash
+npm install
+npm run setup
+npm run diagnose
+npm run dev
+```
+
+- دستور `npm run setup` آدرس و کلید Supabase را از تو می‌گیرد و فایل خصوصی `.env.local` می‌سازد.
+- دستور `npm run diagnose` اتصال را واقعاً آزمایش می‌کند و مشخص می‌کند مشکل از URL/کلید، شبکه یا اجرا نشدن schema است.
+- بعد از اجرای موفق، آدرس محلی را که Vite در ترمینال چاپ می‌کند باز کن.
+
+اگر `npm run diagnose` اتصال را تأیید کرد ولی ورود یا عضویت مشکل داشت، این موارد را بررسی کن: Phone provider روشن باشد، Confirm phone خاموش باشد، ثبت‌نام عمومی فعال باشد و schema به‌طور کامل اجرا شده باشد.
+
+## مدیر اصلی
+
+بعد از آماده شدن دیتابیس، از سایت با شماره **09333167279** ثبت‌نام کن. trigger سمت دیتابیس نقش مدیر اصلی را با تطبیق دقیق شماره بین‌المللی تنظیم می‌کند؛ فرم ثبت‌نام فیلد انتخاب نقش ندارد. اجرای مجدد schema هم حساب‌های phone-auth قبلیِ بدون پروفایل را تا حد ممکن تکمیل می‌کند.
+
+اگر قبلاً ثبت‌نام با خطای `Failed to fetch` مواجه شده، این پرس‌وجو را در SQL Editor اجرا کن:
+
+```sql
+select id, phone
+from auth.users
+where regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = '989333167279';
+```
+
+اگر نتیجه‌ای ندارد، حساب اصلاً در Supabase Auth ساخته نشده است؛ اول `npm run diagnose` را موفق کن و سپس دوباره ثبت‌نام کن. اگر حساب وجود دارد اما پروفایل ندارد، فایل `supabase/schema.sql` را دوباره اجرا کن تا backfill انجام شود.
+
+## انتشار با GitHub و Vercel
+
+1. پوشه پروژه را به یک repository در GitHub ارسال کن. فایل `.env.local` به‌وسیله `.gitignore` از Git خارج می‌ماند.
+2. در [Vercel](https://vercel.com/) پروژه GitHub را از **Add New → Project** وارد کن.
+3. در **Project Settings → Environment Variables** این دو متغیر را اضافه کن:
+   - `VITE_SUPABASE_URL` = Project URL در Supabase
+   - `VITE_SUPABASE_PUBLISHABLE_KEY` = کلید Publishable یا anon
+4. Build command را `npm run build` و Output Directory را `dist` بگذار. Vercel معمولاً این مقادیر را خودکار تشخیص می‌دهد.
+5. Deploy کن. هر وقت متغیر محیطی را عوض کردی، یک redeploy انجام بده.
+
+## امکانات
+
+- لندینگ برندمحور، نمایش اعضای فعال، ورود و عضویت با نام، شماره موبایل، رمز عبور و انتخاب بخش.
+- مدیر اصلی و مدیران بخش؛ مدیر اصلی می‌تواند مدیر بخش منصوب یا عزل کند.
+- مدیریت پروژه و درخواست عضویت در پروژه.
+- چندنفره بودن تسک‌ها، اولویت، وضعیت و مهلت انجام.
+- تقویم رویدادهای مجزا برای بخش‌ها.
+- گزارش محرمانه به مدیر اصلی.
+- لوگوها و رنگ‌بندی اختصاصی تیم‌ها.
+
+## چند نکته فنی
+
+- شماره ورود به قالب بین‌المللی `+98...` نرمال می‌شود.
+- شماره‌های موبایل در فهرست عمومی نمایش داده نمی‌شوند.
+- عملیات «حذف عضو» حساب را غیرفعال می‌کند؛ حذف کامل کاربر از Supabase Auth از مرورگر انجام نمی‌شود.
+- برای تست ساخت پروژه: `npm run check` و سپس `npm run build`.
+
+## ساختار اصلی
+
+```text
+NOWERA-Management/
+├── api/health.js
+├── public/brands/           # لوگوها
+├── scripts/setup.mjs        # ساخت .env.local
+├── scripts/diagnose.mjs     # تست اتصال دیتابیس
+├── src/App.jsx              # لندینگ و داشبورد
+├── src/lib/supabase.js      # اتصال Supabase
+├── src/lib/helpers.js
+├── src/styles.css
+├── supabase/schema.sql      # جداول، triggerها، توابع و RLS
+├── .env.example
+├── vercel.json
+└── package.json
+```
