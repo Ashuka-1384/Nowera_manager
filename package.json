@@ -9,7 +9,7 @@
     "preview": "vite preview --host 0.0.0.0",
     "setup": "node scripts/setup.mjs",
     "diagnose": "node scripts/diagnose.mjs",
-    "check": "node --check api/health.js && node --check api/_lib/admin.js && node --check api/admin-create-member.js && node --check api/admin-delete-member.js && node --check scripts/setup.mjs && node --check scripts/diagnose.mjs"
+    "check": "node --check api/health.js && node --check scripts/setup.mjs && node --check scripts/diagnose.mjs"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",

@@ -209,65 +209,9 @@ export default function App() {
   const revokeAdmin = async (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId), 'دسترسی مدیریت لغو شد.');
   const deactivateMember = async (userId) => runMutation(() => supabase.from('profiles').update({ is_active: false }).eq('id', userId), 'دسترسی عضو غیرفعال شد.');
 
-  const createMember = async (form) => {
-    if (!supabase || profile?.role !== 'super_admin') {
-      notify('فقط مدیر اصلی می‌تواند عضو جدید ایجاد کند.', 'error');
-      return false;
-    }
-    const phone = normalizePhone(form.phone);
-    if (!/^\+989\d{9}$/.test(phone)) {
-      notify('شماره موبایل معتبر نیست؛ مانند 9123456789 وارد کنید.', 'error');
-      return false;
-    }
-    if (String(form.password || '').length < 8) {
-      notify('رمز عبور باید حداقل ۸ کاراکتر باشد.', 'error');
-      return false;
-    }
-    try {
-      const { data: authData } = await supabase.auth.getSession();
-      const response = await fetch('/api/admin-create-member', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authData.session?.access_token || ''}` },
-        body: JSON.stringify({ full_name: form.full_name.trim(), phone, department: form.department, password: form.password }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) {
-        notify(result.error || 'ایجاد عضو ناموفق بود. تنظیمات سرور را بررسی کنید.', 'error');
-        return false;
-      }
-      notify('عضو جدید با موفقیت ایجاد شد. اطلاعات ورود را به‌صورت امن در اختیار او قرار دهید.');
-      await refresh();
-      return true;
-    } catch (error) {
-      notify(explainError(error), 'error');
-      return false;
-    }
-  };
-
-  const deleteMember = async (userId) => {
-    if (!supabase || profile?.role !== 'super_admin' || userId === profile.id) {
-      notify('این عملیات برای حساب فعلی مجاز نیست.', 'error');
-      return false;
-    }
-    if (!window.confirm('حذف دائمی این عضو و حساب ورود او؟ این عملیات قابل بازگشت نیست.')) return false;
-    try {
-      const { data: authData } = await supabase.auth.getSession();
-      const response = await fetch('/api/admin-delete-member', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authData.session?.access_token || ''}` },
-        body: JSON.stringify({ user_id: userId }),
-      });
-      const result = await response.json().catch(() => ({}));
-      if (!response.ok) { notify(result.error || 'حذف عضو ناموفق بود.', 'error'); return false; }
-      notify('حساب عضو حذف شد.');
-      await refresh();
-      return true;
-    } catch (error) { notify(explainError(error), 'error'); return false; }
-  };
-
   const commonProps = {
     profile, data, notify, refresh, openDialog: setDialog, requestProject, requestTask, decideRequest,
-    updateTask, updateProject, deleteEvent, updateReport, assignAdmin, revokeAdmin, deactivateMember, createMember, deleteMember,
+    updateTask, updateProject, deleteEvent, updateReport, assignAdmin, revokeAdmin, deactivateMember,
     searchTerm, setSearchTerm,
   };
 
@@ -311,7 +255,7 @@ export default function App() {
 function explainError(error) {
   const message = error?.message || String(error || 'خطای نامشخص');
   if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|timeout/i.test(message)) return 'ارتباط با Supabase برقرار نشد. اینترنت/VPN، آدرس پروژه و کلید را بررسی کن و npm run diagnose را اجرا کن.';
-  if (/row-level security|permission denied|insufficient privileges/i.test(message)) return 'دسترسی دیتابیس این عملیات را رد کرد. نقش حساب و سیاست‌های RLS را بررسی کنید؛ برای ایجاد یا حذف حساب از عملیات مخصوص مدیر اصلی استفاده کنید.';
+  if (/row-level security|permission denied/i.test(message)) return 'دسترسی این عملیات برای نقش فعلی مجاز نیست.';
   if (/duplicate key|already exists/i.test(message)) return 'این درخواست قبلاً ثبت شده است.';
   if (/JWT|session/i.test(message)) return 'نشست شما معتبر نیست؛ خارج شو و دوباره وارد شو.';
   return message;
@@ -432,7 +376,7 @@ function explainAuthError(error) {
   if (/password should be at least/i.test(message)) return 'رمز عبور باید حداقل ۸ کاراکتر باشد.';
   if (/user already registered|already been registered/i.test(message)) return 'این شماره قبلاً ثبت شده است؛ از بخش ورود استفاده کن.';
   if (/email.*invalid|invalid.*email/i.test(message)) return 'Supabase شناسهٔ داخلی ورود را نپذیرفت. مطمئن شو Email provider فعال و Confirm email خاموش است؛ اگر خطا ادامه داشت متن دقیق خطا را بررسی کن.';
-  if (/signups not allowed|signups are disabled|signup is disabled/i.test(message)) return 'ثبت‌نام عمومی در Supabase غیرفعال است. از پنل مدیریت اعضای NOWERA عضو بسازید؛ برای عضویت عمومی، Authentication → Settings → Allow new users to sign up را فعال کنید.';
+  if (/signups not allowed/i.test(message)) return 'ثبت‌نام عمومی در تنظیمات Auth غیرفعال است.';
   if (/rate limit/i.test(message)) return 'تعداد تلاش‌ها زیاد شده است؛ کمی بعد دوباره امتحان کن.';
   return message || 'ورود یا ثبت‌نام انجام نشد.';
 }
@@ -586,20 +530,17 @@ function ReportsPage({ profile, data, openDialog, updateReport }) {
   </div>;
 }
 
-function MembersPage({ profile, data, assignAdmin, revokeAdmin, deactivateMember, createMember, deleteMember, searchTerm, setSearchTerm }) {
+function MembersPage({ profile, data, assignAdmin, revokeAdmin, deactivateMember, searchTerm, setSearchTerm }) {
   const [departmentFilter, setDepartmentFilter] = useState(profile.role === 'department_admin' ? profile.department : 'all');
   const [selectedUser, setSelectedUser] = useState('');
   const [adminDepartment, setAdminDepartment] = useState('Technoplus');
-  const [newMember, setNewMember] = useState({ full_name: '', phone: '', password: '', department: 'Technoplus' });
-  const [creatingMember, setCreatingMember] = useState(false);
   const superAdmin = profile.role === 'super_admin';
   const members = data.profiles.filter((member) => member.is_active && (departmentFilter === 'all' || member.department === departmentFilter) && `${member.full_name} ${member.department}`.toLowerCase().includes(searchTerm.toLowerCase()));
   const eligible = data.profiles.filter((member) => member.is_active && member.role === 'member');
   return <div className="page-content"><PageHeader eyebrow="PEOPLE / ACCESS CONTROL" title="اعضا و دسترسی‌ها" description={superAdmin ? 'مدیریت اعضا، انتساب مدیر هر بخش و کنترل دسترسی در اختیار شماست.' : `اعضای فعال ${getDepartment(profile.department).name} و دسترسی‌های مربوط به بخش شما.`} badge={`${toFaDigits(data.profiles.filter((p) => p.is_active).length)} عضو`} />
-    {superAdmin && <section className="admin-assignment-card member-create-card"><div className="admin-assignment-icon"><UserPlus size={22} /></div><div className="admin-assignment-copy"><span className="panel-kicker">NEW TEAM MEMBER</span><h3>افزودن عضو جدید</h3><p>ساخت حساب از پنل مدیریت؛ مستقل از فعال بودن ثبت‌نام عمومی.</p></div><form className="member-create-form" onSubmit={async (e) => { e.preventDefault(); setCreatingMember(true); try { const ok = await createMember(newMember); if (ok) setNewMember({ full_name: '', phone: '', password: '', department: 'Technoplus' }); } finally { setCreatingMember(false); } }}><input required minLength={2} maxLength={100} placeholder="نام و نام خانوادگی" value={newMember.full_name} onChange={(e) => setNewMember({ ...newMember, full_name: e.target.value })} /><input required dir="ltr" inputMode="tel" placeholder="شماره موبایل 9123456789" value={newMember.phone} onChange={(e) => setNewMember({ ...newMember, phone: e.target.value })} /><input required dir="ltr" minLength={8} type="password" autoComplete="new-password" placeholder="رمز اولیه (حداقل ۸ کاراکتر)" value={newMember.password} onChange={(e) => setNewMember({ ...newMember, password: e.target.value })} /><select value={newMember.department} onChange={(e) => setNewMember({ ...newMember, department: e.target.value })}>{DEPARTMENTS.map((d) => <option value={d.id} key={d.id}>{d.name}</option>)}</select><button className="button button-primary button-small" type="submit" disabled={creatingMember}>{creatingMember ? 'در حال ساخت…' : 'ایجاد حساب عضو'} <UserPlus size={15} /></button></form></section>}
     {superAdmin && <section className="admin-assignment-card"><div className="admin-assignment-icon"><Crown size={22} /></div><div className="admin-assignment-copy"><span className="panel-kicker">SUPER ADMIN CONTROL</span><h3>تعیین مدیر بخش</h3><p>فقط مدیر اصلی می‌تواند نقش مدیر بخش را اعطا یا لغو کند.</p></div><div className="admin-assignment-controls"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}><option value="">انتخاب عضو…</option>{eligible.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {getDepartment(member.department).name}</option>)}</select><select value={adminDepartment} onChange={(e) => setAdminDepartment(e.target.value)}>{DEPARTMENTS.map((department) => <option value={department.id} key={department.id}>{department.name}</option>)}</select><button className="button button-primary button-small" disabled={!selectedUser} onClick={async () => { const ok = await assignAdmin(selectedUser, adminDepartment); if (ok) setSelectedUser(''); }}>اعطای دسترسی <ShieldCheck size={15} /></button></div></section>}
     <div className="filter-toolbar members-toolbar"><div className="search-field"><Search size={17} /><input placeholder="جست‌وجوی اعضا…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /><kbd>NAME</kbd></div><div className="department-filter"><span>بخش:</span><select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>{profile.role === 'super_admin' && <option value="all">همه تیم‌ها</option>}{DEPARTMENTS.filter((d) => profile.role !== 'department_admin' || d.id === profile.department).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div></div>
-    <div className="members-table-card"><div className="members-table-header"><span>عضو / نقش</span><span>بخش</span><span>وضعیت</span><span>تاریخ عضویت</span><span>عملیات</span></div>{members.filter((member) => superAdmin || member.role === 'member' || member.id === profile.id).map((member) => { const dept = getDepartment(member.department); const canDeactivate = member.id !== profile.id && member.role === 'member' && (superAdmin || (profile.role === 'department_admin' && profile.department === member.department)); return <div className="member-table-row" key={member.id}><div className="member-cell-primary"><Avatar profile={member} size="small" /><div><strong>{member.full_name}{member.id === profile.id && <small className="you-label">شما</small>}</strong><span>{member.id === profile.id ? (member.phone || 'حساب کاربری شما') : 'عضو فعال نَوِرا'}</span></div></div><div className="member-cell-dept"><i style={{ '--dept-color': dept.color }} />{dept.name}</div><div><span className={`role-chip role-${member.role}`}>{member.role === 'super_admin' && <Crown size={12} />}{ROLE_LABELS[member.role]}</span></div><div className="member-cell-date">{faDate(member.created_at)}</div><div className="member-cell-actions">{superAdmin && member.role === 'department_admin' && <button className="button button-outline button-small" onClick={() => revokeAdmin(member.id, member.department)}><Ban size={13} /> عزل مدیر</button>}{canDeactivate && <button title="غیرفعال کردن عضو" className="icon-button danger-icon" onClick={() => deactivateMember(member.id)}><Ban size={16} /></button>}{superAdmin && member.role !== 'super_admin' && <button title="حذف دائمی عضو" className="icon-button danger-icon member-delete-action" onClick={() => deleteMember(member.id)}><X size={16} /></button>}{!canDeactivate && !(superAdmin && member.role !== 'super_admin') && <span className="muted-dash">—</span>}</div></div>; })}</div>
+    <div className="members-table-card"><div className="members-table-header"><span>عضو / نقش</span><span>بخش</span><span>وضعیت</span><span>تاریخ عضویت</span><span>عملیات</span></div>{members.filter((member) => superAdmin || member.role === 'member' || member.id === profile.id).map((member) => { const dept = getDepartment(member.department); const canDeactivate = member.id !== profile.id && member.role === 'member' && (superAdmin || (profile.role === 'department_admin' && profile.department === member.department)); return <div className="member-table-row" key={member.id}><div className="member-cell-primary"><Avatar profile={member} size="small" /><div><strong>{member.full_name}{member.id === profile.id && <small className="you-label">شما</small>}</strong><span>{member.id === profile.id ? (member.phone || 'حساب کاربری شما') : 'عضو فعال نَوِرا'}</span></div></div><div className="member-cell-dept"><i style={{ '--dept-color': dept.color }} />{dept.name}</div><div><span className={`role-chip role-${member.role}`}>{member.role === 'super_admin' && <Crown size={12} />}{ROLE_LABELS[member.role]}</span></div><div className="member-cell-date">{faDate(member.created_at)}</div><div className="member-cell-actions">{superAdmin && member.role === 'department_admin' && <button className="button button-outline button-small" onClick={() => revokeAdmin(member.id, member.department)}><Ban size={13} /> عزل مدیر</button>}{canDeactivate && <button title="غیرفعال کردن عضو" className="icon-button danger-icon" onClick={() => deactivateMember(member.id)}><X size={16} /></button>}{!canDeactivate && !(superAdmin && member.role === 'department_admin') && <span className="muted-dash">—</span>}</div></div>; })}</div>
     <div className="members-table-foot"><span><i /> نمایش اعضای فعال</span><span>{toFaDigits(members.filter((m) => superAdmin || m.role === 'member' || m.id === profile.id).length)} نتیجه</span></div>
   </div>;
 }

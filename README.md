@@ -90,16 +90,3 @@ NOWERA-Management/
 ├── vercel.json
 └── package.json
 ```
-
-
-## عملیات امن مدیریت اعضا در Vercel
-
-برای قابلیت «افزودن عضو» از پنل و «حذف دائمی عضو»، سه متغیر زیر را در **Vercel → Project → Settings → Environment Variables** برای محیط Production (و در صورت نیاز Preview) تنظیم کنید:
-
-- `SUPABASE_URL`: آدرس پروژه Supabase
-- `SUPABASE_ANON_KEY`: کلید Publishable/anon عمومی
-- `SUPABASE_SERVICE_ROLE_KEY`: کلید service role فقط سمت سرور؛ هرگز آن را با پیشوند `VITE_` تعریف نکنید و در کد مرورگر قرار ندهید.
-
-پس از افزودن متغیرها، یک deployment جدید انجام دهید. APIهای `api/admin-create-member.js` و `api/admin-delete-member.js` توکن نشست را بررسی می‌کنند و فقط برای مدیر اصلی فعال اجرا می‌شوند. افزودن عضو از پنل به فعال بودن ثبت‌نام عمومی Supabase وابسته نیست. حذف دائمی، حساب Auth را حذف می‌کند؛ سوابق ساخته‌شده توسط عضو به مدیر اصلی منتقل می‌شوند و عضویت‌های وابسته حذف می‌شوند. این عملیات قابل بازگشت نیست.
-
-اگر ثبت‌نام عمومی صفحه ورود همچنان باید فعال باشد، در Supabase به **Authentication → Settings** بروید و گزینه **Allow new users to sign up** را فعال کنید. این تنظیم یک گزینهٔ Dashboard است و از داخل فایل‌های این پروژه قابل تغییر نیست.
