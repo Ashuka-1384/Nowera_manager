@@ -4,7 +4,7 @@ import {
   ChevronDown, ChevronLeft, CircleHelp, Clock3, Crown, Flag, FolderKanban,
   Gem, LayoutDashboard, LogIn, LogOut, Menu, MessageSquareWarning, Plus, Send,
   Settings2, ShieldCheck, Sparkles, Target, Users, X, Zap, Ban, CalendarPlus, UserPlus,
-  ClipboardList, CircleDot, Search, Layers3, Briefcase, BarChart3,
+  ClipboardList, CircleDot, Search, Layers3, Briefcase, BarChart3, UserMinus,
 } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
 import {
@@ -207,7 +207,11 @@ export default function App() {
 
   const assignAdmin = async (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId), 'دسترسی مدیریت بخش اعطا شد.');
   const revokeAdmin = async (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId), 'دسترسی مدیریت لغو شد.');
-  const deactivateMember = async (userId) => runMutation(() => supabase.from('profiles').update({ is_active: false }).eq('id', userId), 'دسترسی عضو غیرفعال شد.');
+  // Use a database-side, authorization-checked RPC so an RLS/no-op update cannot look successful.
+  const deactivateMember = async (userId) => runMutation(
+    () => supabase.rpc('deactivate_member', { p_user_id: userId }),
+    'دسترسی عضو بسته شد و او از فهرست اعضای فعال خارج شد.'
+  );
 
   const commonProps = {
     profile, data, notify, refresh, openDialog: setDialog, requestProject, requestTask, decideRequest,
@@ -255,7 +259,13 @@ export default function App() {
 function explainError(error) {
   const message = error?.message || String(error || 'خطای نامشخص');
   if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|timeout/i.test(message)) return 'ارتباط با Supabase برقرار نشد. اینترنت/VPN، آدرس پروژه و کلید را بررسی کن و npm run diagnose را اجرا کن.';
-  if (/row-level security|permission denied/i.test(message)) return 'دسترسی این عملیات برای نقش فعلی مجاز نیست.';
+  if (/deactivate_member|PGRST202|schema cache/i.test(message)) return 'نسخه دیتابیس هنوز به‌روز نشده است؛ فایل supabase/schema.sql جدید را در SQL Editor اجرا کن و سپس دوباره تلاش کن.';
+  if (/row-level security|permission denied|insufficient privilege|42501/i.test(message)) return 'دسترسی این عملیات برای نقش فعلی مجاز نیست.';
+  if (/only the super admin or the target department admin/i.test(message)) return 'این عملیات فقط برای مدیر اصلی یا مدیر همان بخش مجاز است.';
+  if (/only the super admin|only super.admin/i.test(message)) return 'فقط مدیر اصلی می‌تواند دسترسی عضو را حذف کند.';
+  if (/cannot remove your own|own account/i.test(message)) return 'برای جلوگیری از قفل‌شدن پنل، امکان حذف دسترسی حساب خودت وجود ندارد.';
+  if (/super admin account cannot be removed|cannot deactivate a super.admin/i.test(message)) return 'حساب مدیر اصلی از داخل پنل قابل حذف نیست.';
+  if (/member not found|could not be updated/i.test(message)) return 'عضو پیدا نشد یا وضعیت او تغییر نکرد؛ فهرست را تازه‌سازی و دوباره بررسی کن.';
   if (/duplicate key|already exists/i.test(message)) return 'این درخواست قبلاً ثبت شده است.';
   if (/JWT|session/i.test(message)) return 'نشست شما معتبر نیست؛ خارج شو و دوباره وارد شو.';
   return message;
@@ -534,14 +544,113 @@ function MembersPage({ profile, data, assignAdmin, revokeAdmin, deactivateMember
   const [departmentFilter, setDepartmentFilter] = useState(profile.role === 'department_admin' ? profile.department : 'all');
   const [selectedUser, setSelectedUser] = useState('');
   const [adminDepartment, setAdminDepartment] = useState('Technoplus');
+  const [memberToDeactivate, setMemberToDeactivate] = useState(null);
+  const [deactivating, setDeactivating] = useState(false);
   const superAdmin = profile.role === 'super_admin';
-  const members = data.profiles.filter((member) => member.is_active && (departmentFilter === 'all' || member.department === departmentFilter) && `${member.full_name} ${member.department}`.toLowerCase().includes(searchTerm.toLowerCase()));
-  const eligible = data.profiles.filter((member) => member.is_active && member.role === 'member');
-  return <div className="page-content"><PageHeader eyebrow="PEOPLE / ACCESS CONTROL" title="اعضا و دسترسی‌ها" description={superAdmin ? 'مدیریت اعضا، انتساب مدیر هر بخش و کنترل دسترسی در اختیار شماست.' : `اعضای فعال ${getDepartment(profile.department).name} و دسترسی‌های مربوط به بخش شما.`} badge={`${toFaDigits(data.profiles.filter((p) => p.is_active).length)} عضو`} />
-    {superAdmin && <section className="admin-assignment-card"><div className="admin-assignment-icon"><Crown size={22} /></div><div className="admin-assignment-copy"><span className="panel-kicker">SUPER ADMIN CONTROL</span><h3>تعیین مدیر بخش</h3><p>فقط مدیر اصلی می‌تواند نقش مدیر بخش را اعطا یا لغو کند.</p></div><div className="admin-assignment-controls"><select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)}><option value="">انتخاب عضو…</option>{eligible.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {getDepartment(member.department).name}</option>)}</select><select value={adminDepartment} onChange={(e) => setAdminDepartment(e.target.value)}>{DEPARTMENTS.map((department) => <option value={department.id} key={department.id}>{department.name}</option>)}</select><button className="button button-primary button-small" disabled={!selectedUser} onClick={async () => { const ok = await assignAdmin(selectedUser, adminDepartment); if (ok) setSelectedUser(''); }}>اعطای دسترسی <ShieldCheck size={15} /></button></div></section>}
-    <div className="filter-toolbar members-toolbar"><div className="search-field"><Search size={17} /><input placeholder="جست‌وجوی اعضا…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} /><kbd>NAME</kbd></div><div className="department-filter"><span>بخش:</span><select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>{profile.role === 'super_admin' && <option value="all">همه تیم‌ها</option>}{DEPARTMENTS.filter((d) => profile.role !== 'department_admin' || d.id === profile.department).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div></div>
-    <div className="members-table-card"><div className="members-table-header"><span>عضو / نقش</span><span>بخش</span><span>وضعیت</span><span>تاریخ عضویت</span><span>عملیات</span></div>{members.filter((member) => superAdmin || member.role === 'member' || member.id === profile.id).map((member) => { const dept = getDepartment(member.department); const canDeactivate = member.id !== profile.id && member.role === 'member' && (superAdmin || (profile.role === 'department_admin' && profile.department === member.department)); return <div className="member-table-row" key={member.id}><div className="member-cell-primary"><Avatar profile={member} size="small" /><div><strong>{member.full_name}{member.id === profile.id && <small className="you-label">شما</small>}</strong><span>{member.id === profile.id ? (member.phone || 'حساب کاربری شما') : 'عضو فعال نَوِرا'}</span></div></div><div className="member-cell-dept"><i style={{ '--dept-color': dept.color }} />{dept.name}</div><div><span className={`role-chip role-${member.role}`}>{member.role === 'super_admin' && <Crown size={12} />}{ROLE_LABELS[member.role]}</span></div><div className="member-cell-date">{faDate(member.created_at)}</div><div className="member-cell-actions">{superAdmin && member.role === 'department_admin' && <button className="button button-outline button-small" onClick={() => revokeAdmin(member.id, member.department)}><Ban size={13} /> عزل مدیر</button>}{canDeactivate && <button title="غیرفعال کردن عضو" className="icon-button danger-icon" onClick={() => deactivateMember(member.id)}><X size={16} /></button>}{!canDeactivate && !(superAdmin && member.role === 'department_admin') && <span className="muted-dash">—</span>}</div></div>; })}</div>
-    <div className="members-table-foot"><span><i /> نمایش اعضای فعال</span><span>{toFaDigits(members.filter((m) => superAdmin || m.role === 'member' || m.id === profile.id).length)} نتیجه</span></div>
+  const activeProfiles = data.profiles.filter((member) => member.is_active);
+  const members = activeProfiles.filter((member) => {
+    const matchesDepartment = departmentFilter === 'all' || member.department === departmentFilter;
+    const searchable = `${member.full_name} ${member.department} ${getDepartment(member.department).name}`.toLocaleLowerCase();
+    return matchesDepartment && searchable.includes(searchTerm.toLocaleLowerCase());
+  });
+  const eligible = activeProfiles.filter((member) => member.role === 'member');
+  const adminsCount = activeProfiles.filter((member) => member.role !== 'member').length;
+  const departmentsWithMembers = DEPARTMENTS.filter((department) => activeProfiles.some((member) => member.department === department.id)).length;
+  const displayedMembers = members.filter((member) => superAdmin || member.role === 'member' || member.id === profile.id);
+
+  const confirmDeactivate = async () => {
+    if (!memberToDeactivate || deactivating) return;
+    setDeactivating(true);
+    try {
+      const success = await deactivateMember(memberToDeactivate.id);
+      if (success) setMemberToDeactivate(null);
+    } finally {
+      setDeactivating(false);
+    }
+  };
+
+  return <div className="page-content members-page">
+    <PageHeader
+      eyebrow="PEOPLE / ACCESS CONTROL"
+      title="اعضا و دسترسی‌ها"
+      description={superAdmin ? 'ترکیب تیم‌ها، سطح دسترسی و عضویت افراد را از یک فضای یکپارچه مدیریت کنید.' : `اعضای فعال ${getDepartment(profile.department).name} و دسترسی‌های مربوط به بخش شما.`}
+      badge={`${toFaDigits(activeProfiles.length)} عضو فعال`}
+    />
+
+    <section className="members-summary-grid" aria-label="خلاصه وضعیت اعضا">
+      <article className="members-summary-card members-summary-primary">
+        <div className="members-summary-copy"><span>ACTIVE MEMBERS</span><strong>{toFaDigits(activeProfiles.length)}</strong><small>اعضای دارای دسترسی فعال</small></div>
+        <div className="members-summary-icon"><Users size={21} /></div>
+      </article>
+      <article className="members-summary-card">
+        <div className="members-summary-copy"><span>ADMIN ACCESS</span><strong>{toFaDigits(adminsCount)}</strong><small>مدیر اصلی و مدیران بخش</small></div>
+        <div className="members-summary-icon members-summary-violet"><ShieldCheck size={21} /></div>
+      </article>
+      <article className="members-summary-card">
+        <div className="members-summary-copy"><span>DIVISIONS</span><strong>{toFaDigits(departmentsWithMembers)}</strong><small>تیم دارای عضو فعال</small></div>
+        <div className="members-summary-icon members-summary-blue"><Layers3 size={21} /></div>
+      </article>
+    </section>
+
+    {superAdmin && <section className="admin-assignment-card">
+      <div className="admin-assignment-icon"><Crown size={23} /></div>
+      <div className="admin-assignment-copy"><span className="panel-kicker">SUPER ADMIN CONTROL</span><h3>واگذاری دسترسی مدیریتی</h3><p>یک عضو فعال را انتخاب کنید و مسئولیت یکی از بخش‌ها را به او بسپارید.</p></div>
+      <div className="admin-assignment-controls">
+        <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} aria-label="انتخاب عضو برای مدیریت">
+          <option value="">انتخاب عضو…</option>
+          {eligible.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {getDepartment(member.department).name}</option>)}
+        </select>
+        <select value={adminDepartment} onChange={(e) => setAdminDepartment(e.target.value)} aria-label="انتخاب بخش مدیریتی">
+          {DEPARTMENTS.map((department) => <option value={department.id} key={department.id}>{department.name}</option>)}
+        </select>
+        <button className="button button-primary button-small" disabled={!selectedUser} onClick={async () => { const ok = await assignAdmin(selectedUser, adminDepartment); if (ok) setSelectedUser(''); }}>اعطای دسترسی <ShieldCheck size={15} /></button>
+      </div>
+    </section>}
+
+    <section className="members-directory-section">
+      <div className="members-directory-heading">
+        <div><span className="section-kicker">TEAM DIRECTORY</span><h2>فهرست اعضا</h2><p>وضعیت عضویت و سطح دسترسی هر فرد را مرور کنید.</p></div>
+        <span className="members-directory-count">{toFaDigits(displayedMembers.length)} نتیجه</span>
+      </div>
+      <div className="filter-toolbar members-toolbar">
+        <div className="search-field"><Search size={18} /><input placeholder="جست‌وجوی نام یا تیم…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} aria-label="جست‌وجوی اعضا" /><kbd>⌕</kbd></div>
+        <div className="department-filter"><span>فیلتر تیم</span><select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} aria-label="فیلتر بر اساس تیم">
+          {superAdmin && <option value="all">همه تیم‌ها</option>}
+          {DEPARTMENTS.filter((department) => profile.role !== 'department_admin' || department.id === profile.department).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
+        </select></div>
+      </div>
+
+      <div className="members-table-card">
+        <div className="members-table-header"><span>عضو</span><span>بخش تخصصی</span><span>سطح دسترسی</span><span>تاریخ عضویت</span><span>عملیات</span></div>
+        {displayedMembers.length ? displayedMembers.map((member) => {
+          const department = getDepartment(member.department);
+          const canDeactivate = member.id !== profile.id && member.role !== 'super_admin' && (superAdmin || (profile.role === 'department_admin' && member.role === 'member' && profile.department === member.department));
+          return <div className="member-table-row" key={member.id}>
+            <div className="member-cell-primary"><Avatar profile={member} size="medium" /><div><strong>{member.full_name}{member.id === profile.id && <small className="you-label">حساب شما</small>}</strong><span>{member.id === profile.id ? 'عضو واردشده' : 'عضو فعال نَوِرا'}</span></div></div>
+            <div className="member-cell-dept"><i style={{ '--dept-color': department.color }} />{department.name}</div>
+            <div><span className={`role-chip role-${member.role}`}>{member.role === 'super_admin' && <Crown size={13} />}{ROLE_LABELS[member.role]}</span></div>
+            <div className="member-cell-date">{faDate(member.created_at)}</div>
+            <div className="member-cell-actions">
+              {superAdmin && member.role === 'department_admin' && <button className="button button-outline button-small" onClick={() => revokeAdmin(member.id, member.department)}><Ban size={14} /> عزل مدیر</button>}
+              {canDeactivate && <button title="حذف از اعضای فعال" aria-label={`حذف ${member.full_name} از اعضای فعال`} className="button button-danger-ghost button-small member-remove-button" onClick={() => setMemberToDeactivate(member)}><UserMinus size={15} /> حذف دسترسی</button>}
+              {!canDeactivate && !(superAdmin && member.role === 'department_admin') && <span className="muted-dash">—</span>}
+            </div>
+          </div>;
+        }) : <div className="members-empty-state"><Users size={28} /><strong>عضوی با این مشخصات پیدا نشد</strong><span>عبارت جست‌وجو یا فیلتر تیم را تغییر دهید.</span></div>}
+      </div>
+      <div className="members-table-foot"><span><i /> نمایش اعضای فعال</span><span>{toFaDigits(displayedMembers.length)} نفر در این فهرست</span></div>
+    </section>
+
+    {memberToDeactivate && <div className="member-confirm-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !deactivating) setMemberToDeactivate(null); }}>
+      <section className="member-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="member-confirm-title" aria-describedby="member-confirm-description">
+        <button className="member-confirm-close" type="button" aria-label="بستن" disabled={deactivating} onClick={() => setMemberToDeactivate(null)}><X size={18} /></button>
+        <div className="member-confirm-icon"><UserMinus size={24} /></div>
+        <span className="section-kicker">MEMBER ACCESS</span>
+        <h2 id="member-confirm-title">حذف عضو از فهرست فعال؟</h2>
+        <p id="member-confirm-description"><strong>{memberToDeactivate.full_name}</strong> دیگر به فضای کاری نَوِرا دسترسی نخواهد داشت. سوابق و فعالیت‌های مرتبط برای حفظ تاریخچه سازمان باقی می‌مانند.</p>
+        <div className="member-confirm-actions"><button className="button button-secondary" type="button" disabled={deactivating} onClick={() => setMemberToDeactivate(null)}>انصراف</button><button className="button button-danger-ghost member-confirm-submit" type="button" disabled={deactivating} onClick={confirmDeactivate}>{deactivating ? 'در حال اعمال…' : 'تأیید و حذف دسترسی'} <UserMinus size={16} /></button></div>
+      </section>
+    </div>}
   </div>;
 }
 

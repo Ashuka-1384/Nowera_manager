@@ -1,6 +1,6 @@
 -- NOWERA Management · Supabase / PostgreSQL bootstrap
 -- Run this file in Supabase SQL Editor using the project owner. Re-running it is supported.
--- The initial super-admin is assigned from an exact normalized owner phone match. With SMS verification off, this does not prove phone ownership.
+-- New signups never receive admin privileges from submitted phone metadata; bootstrap the first super-admin through trusted SQL.
 
 create extension if not exists pgcrypto;
 
@@ -100,6 +100,69 @@ create or replace function public.is_active_user()
 returns boolean language sql stable security definer set search_path = public
 as $$ select exists (select 1 from public.profiles p where p.id = auth.uid() and p.is_active = true); $$;
 
+-- Remove a person from the active directory without destroying audit history.
+-- Security-definer avoids silent zero-row UPDATEs caused by policy/schema drift;
+-- authorization is re-checked inside the function on every call.
+create or replace function public.deactivate_member(p_user_id uuid)
+returns void
+language plpgsql
+security definer
+set search_path = public
+as $$
+declare
+  target public.profiles%rowtype;
+begin
+  if auth.uid() is null then
+    raise exception 'Authentication required' using errcode = '42501';
+  end if;
+  if p_user_id is null then
+    raise exception 'Member id is required' using errcode = '22023';
+  end if;
+  if p_user_id = auth.uid() then
+    raise exception 'You cannot remove your own account' using errcode = '42501';
+  end if;
+
+  select * into target
+  from public.profiles
+  where id = p_user_id
+  for update;
+
+  if not found then
+    raise exception 'Member not found' using errcode = 'P0002';
+  end if;
+  if target.role = 'super_admin' then
+    raise exception 'A super admin account cannot be removed from this panel' using errcode = '42501';
+  end if;
+  if not public.is_super_admin() and not (
+    target.role = 'member'
+    and exists (
+      select 1 from public.profiles actor
+      where actor.id = auth.uid()
+        and actor.is_active = true
+        and actor.role = 'department_admin'
+        and actor.department = target.department
+    )
+  ) then
+    raise exception 'Only the super admin or the target department admin can remove this member' using errcode = '42501';
+  end if;
+
+  -- Idempotent: repeated requests leave an already deactivated account unchanged.
+  if not target.is_active then
+    return;
+  end if;
+
+  update public.profiles
+  set is_active = false
+  where id = p_user_id;
+
+  if not found then
+    raise exception 'Member state could not be updated' using errcode = 'P0001';
+  end if;
+end;
+$$;
+revoke all on function public.deactivate_member(uuid) from public, anon, authenticated;
+grant execute on function public.deactivate_member(uuid) to authenticated;
+
 create or replace function public.my_department()
 returns text language sql stable security definer set search_path = public
 as $$ select p.department from public.profiles p where p.id = auth.uid() and p.is_active = true limit 1; $$;
@@ -169,7 +232,7 @@ begin
     coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'),
     phone_value,
     dept,
-    case when digits = '989333167279' then 'super_admin' else 'member' end,
+    'member',
     true
   )
   on conflict (id) do nothing;
@@ -193,11 +256,7 @@ select
       then u.raw_user_meta_data ->> 'department'
     else 'Technoplus'
   end,
-  case
-    when regexp_replace(coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), u.phone, ''), '[^0-9]', '', 'g') = '989333167279'
-      then 'super_admin'
-    else 'member'
-  end,
+  'member',
   true
 from auth.users u
 left join public.profiles p on p.id = u.id
@@ -213,12 +272,17 @@ as $$
 begin
   if auth.uid() is null then return new; end if;
 
-  -- The configured owner account cannot demote or deactivate itself.
-  if regexp_replace(coalesce(old.phone, ''), '[^0-9]', '', 'g') = '989333167279' then
-    new.role := 'super_admin';
-    new.is_active := true;
-    new.phone := old.phone;
-    return new;
+  -- Keep an already-authorized super-admin from demoting/deactivating itself.
+  -- Admin profiles can only be changed through trusted database administration.
+  if old.role = 'super_admin' then
+    if auth.uid() = old.id then
+      new.role := old.role;
+      new.department := old.department;
+      new.phone := old.phone;
+      new.is_active := old.is_active;
+      return new;
+    end if;
+    raise exception 'Super-admin profiles cannot be modified through the application';
   end if;
 
   if auth.uid() <> old.id and public.is_super_admin() and new.role = 'super_admin' then
@@ -251,20 +315,10 @@ drop trigger if exists guard_profile_privileges_trigger on public.profiles;
 create trigger guard_profile_privileges_trigger before update on public.profiles
 for each row execute procedure public.guard_profile_privileges();
 
--- Repair existing roles when this schema is re-run: only the exact normalized owner
--- phone (+989333167279) may retain the super-admin role. Never match by suffix.
-update public.profiles
-set role = case
-      when regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = '989333167279' then 'super_admin'
-      when role = 'super_admin' then 'member'
-      else role
-    end,
-    is_active = case
-      when regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = '989333167279' then true
-      else is_active
-    end
-where role = 'super_admin'
-   or regexp_replace(coalesce(phone, ''), '[^0-9]', '', 'g') = '989333167279';
+-- Intentionally do not assign or repair administrator roles based on phone metadata.
+-- Re-running this schema preserves roles already assigned by a trusted administrator.
+-- For a fresh instance, create the account, verify its identity out-of-band, then promote
+-- its exact profile UUID manually in SQL Editor (see README.md).
 
 -- Keep timestamps fresh after edits.
 create or replace function public.touch_updated_at()
@@ -339,9 +393,8 @@ drop policy if exists "users edit own public profile" on public.profiles;
 create policy "users edit own public profile" on public.profiles
 for update to authenticated using (id = auth.uid() or public.is_super_admin() or (role = 'member' and public.can_manage_department(department)))
 with check (id = auth.uid() or public.is_super_admin() or (role = 'member' and public.can_manage_department(department)));
+-- Profiles are intentionally deactivated through the guarded RPC; direct DELETE is not part of the client API.
 drop policy if exists "super admin can delete profiles" on public.profiles;
-create policy "super admin can delete profiles" on public.profiles
-for delete to authenticated using (public.is_super_admin());
 
 -- Projects are discoverable to active members so people can request to join.
 drop policy if exists "active users view projects" on public.projects;
