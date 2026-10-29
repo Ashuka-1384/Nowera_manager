@@ -1080,3 +1080,94 @@ button:focus-visible, a:focus-visible, input:focus-visible, select:focus-visible
   .auth-modal, .action-modal, .panel-card, .stat-card, .project-card, .team-directory-card,
   .report-card, .settings-profile-card { background-color: #141a28; }
 }
+
+/* NOWERA v2 — quieter, spacious workspace. Existing React structure remains intact. */
+:root {
+  --bg: #f5f6f8;
+  --panel: #ffffff;
+  --panel2: #ffffff;
+  --panel3: #f8f9fb;
+  --border: #e8ebf0;
+  --border-strong: #dce1e8;
+  --text: #202733;
+  --muted: #667085;
+  --muted2: #8b94a4;
+  --gold: #b98a3b;
+  --glass-bg: #fff;
+  --glass-bg-strong: #fff;
+  --glass-border: #e8ebf0;
+  --glass-shadow: 0 4px 18px rgba(22, 32, 48, .035);
+  --glass-blur: 0px;
+}
+html, body { background: #f5f6f8; color: var(--text); }
+body { background: #f5f6f8; color: #202733; }
+.app-shell, .workspace, .page-wrap { background: #f5f6f8; }
+.workspace { padding: clamp(22px, 3.4vw, 48px) clamp(18px, 3.2vw, 48px) 22px; }
+.page-wrap { max-width: 1480px; margin-inline: auto; }
+.page-content { gap: 30px; }
+.page-header { margin-bottom: 10px; }
+.page-header h1, .page-header h2, .page-header h3 { color: #202733; letter-spacing: -.45px; }
+.page-header p, .page-content p { color: #6d7685; }
+.sidebar { background: #fff; border-inline-end: 1px solid #e9edf2; box-shadow: none; }
+.sidebar-nav { gap: 26px; padding: 28px 16px; }
+.nav-group { gap: 8px; }
+.nav-group-label { padding-inline: 12px; color: #98a0ad; letter-spacing: .08em; }
+.nav-item { min-height: 46px; border-radius: 12px; color: #687282; padding-inline: 13px; }
+.nav-item-active { color: #202733; background: #f0f3f7; box-shadow: inset -3px 0 #bd914b; }
+.topbar { background: rgba(245,246,248,.92); border-bottom: 1px solid #e9edf2; box-shadow: none; backdrop-filter: blur(12px); }
+.topbar, .topbar * { color: inherit; }
+.card, .panel, .stat-card, .project-card, .task-card, .members-table-card, .report-card,
+.settings-profile-card, .settings-card, .calendar-panel, .admin-assignment-card,
+.team-directory-card, .value-card, .department-card, .public-member-card {
+  background: #fff !important; border: 1px solid #e8ebf0 !important; box-shadow: 0 4px 18px rgba(22,32,48,.035) !important;
+  backdrop-filter: none !important; -webkit-backdrop-filter: none !important;
+}
+.stat-card, .project-card, .task-card, .report-card, .team-directory-card { border-radius: 18px; }
+.stat-card { padding: 25px; }
+.filter-toolbar, .calendar-toolbar, .members-toolbar { gap: 16px; margin-block: 8px 18px; }
+.search-field, .department-filter select, input, textarea, select { background-color: #fff; color: #26303d; border-color: #e0e5ec; }
+.search-field { min-height: 46px; border-radius: 13px; }
+input::placeholder, textarea::placeholder { color: #a0a7b3; }
+.button { border-radius: 11px; }
+.button-primary { color: #fff; background: #283747; border-color: #283747; box-shadow: none; }
+.button-primary:hover:not(:disabled) { background: #34485c; box-shadow: none; transform: translateY(-1px); }
+.button-ghost, .button-secondary { color: #344054; background: #fff; border-color: #e0e5ec; box-shadow: none; }
+.button-outline { color: #8c692c; border-color: #e2d2b5; background: #fff; }
+.role-chip, .status-pill { box-shadow: none; }
+.members-table-card { overflow: hidden; border-radius: 16px; }
+.members-table-header { background: #f8f9fb; color: #788191; }
+.member-table-row { min-height: 82px; border-top-color: #edf0f4; }
+.admin-assignment-card { padding: 26px; border-radius: 18px; }
+.member-create-form { display: grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap: 10px; min-width: 0; }
+.member-create-form input, .member-create-form select { min-width: 0; width: 100%; min-height: 42px; border-radius: 10px; padding: 9px 12px; }
+.member-create-form button { justify-self: start; }
+.member-delete-action { margin-inline-start: 5px; }
+.auth-modal, .action-dialog { background: #fff; color: #202733; border: 1px solid #e8ebf0; box-shadow: 0 24px 90px rgba(22,32,48,.18); }
+.auth-heading h2, .action-dialog h2 { color: #202733; }
+.auth-heading p, .auth-security { color: #737d8c; }
+.modal-scrim { background: rgba(26,35,48,.48); backdrop-filter: blur(4px); }
+.landing-page { background: #f8f9fb; color: #202733; }
+.landing-nav { background: rgba(255,255,255,.94); border-bottom-color: #e8ebf0; }
+.landing-nav nav a { color: #657080; }
+.hero-section { min-height: 640px; }
+.hero-copy h1 { color: #202733; }
+.hero-description, .section-heading p, .dept-card-copy p, .closing-cta p { color: #697485; }
+.hero-logo-frame { background: #fff; border-color: #e8ebf0; box-shadow: 0 24px 70px rgba(26,38,56,.08); }
+.floating-card { background: #fff; color: #202733; border-color: #e8ebf0; box-shadow: 0 12px 34px rgba(26,38,56,.08); }
+.values-section, .departments-section, .members-section { padding-block: clamp(66px, 8vw, 116px); }
+.value-card { padding: 28px; }
+.closing-cta { background: #eef1f5; color: #202733; }
+.cta-content h2 { color: #202733; }
+.landing-footer { background: #fff; border-top: 1px solid #e8ebf0; color: #7b8492; }
+.toast { background: #fff; color: #202733; border: 1px solid #e8ebf0; box-shadow: 0 12px 40px rgba(22,32,48,.12); }
+@media (max-width: 900px) {
+  .workspace { padding: 20px 18px; }
+  .member-create-form { grid-template-columns: minmax(0,1fr); }
+  .admin-assignment-card { gap: 16px; }
+}
+@media (max-width: 560px) {
+  .workspace { padding: 14px 12px; }
+  .page-content { gap: 22px; }
+  .stat-card { padding: 18px; }
+  .member-table-row { padding-block: 14px; }
+}
