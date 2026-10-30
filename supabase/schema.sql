@@ -184,6 +184,92 @@ as $$
     and exists (select 1 from public.profiles p where p.id = p_user_id and p.is_active = true);
 $$;
 
+-- Managers can directly assign active members without requiring a prior request.
+-- These SECURITY DEFINER RPCs enforce the same department scope as the RLS policies.
+create or replace function public.assign_project_member(p_project_id uuid, p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare project_department text;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  select department into project_department from public.projects where id = p_project_id;
+  if not found then raise exception 'Project not found' using errcode = 'P0002'; end if;
+  if not public.can_manage_department(project_department) then raise exception 'You cannot manage this project' using errcode = '42501'; end if;
+  if not exists (select 1 from public.profiles where id = p_user_id and is_active = true and role = 'member') then
+    raise exception 'Only an active team member can be assigned' using errcode = '22023';
+  end if;
+  insert into public.project_members (project_id, user_id, status, decided_by, decided_at)
+  values (p_project_id, p_user_id, 'approved', auth.uid(), now())
+  on conflict (project_id, user_id) do update
+    set status = 'approved', decided_by = auth.uid(), decided_at = now();
+end;
+$$;
+
+create or replace function public.assign_task_member(p_task_id uuid, p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare project_id_value uuid; project_department text;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  select t.project_id, p.department into project_id_value, project_department
+  from public.tasks t join public.projects p on p.id = t.project_id where t.id = p_task_id;
+  if not found then raise exception 'Task not found' using errcode = 'P0002'; end if;
+  if not public.can_manage_department(project_department) then raise exception 'You cannot manage this task' using errcode = '42501'; end if;
+  if not exists (select 1 from public.profiles where id = p_user_id and is_active = true and role = 'member') then
+    raise exception 'Only an active team member can be assigned' using errcode = '22023';
+  end if;
+  if not public.is_project_member(project_id_value, p_user_id) then
+    raise exception 'The member must be an approved project participant first' using errcode = '42501';
+  end if;
+  insert into public.task_members (task_id, user_id, status, decided_by, decided_at)
+  values (p_task_id, p_user_id, 'approved', auth.uid(), now())
+  on conflict (task_id, user_id) do update
+    set status = 'approved', decided_by = auth.uid(), decided_at = now();
+end;
+$$;
+
+create or replace function public.remove_project_member(p_project_id uuid, p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare project_department text; affected integer;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  select department into project_department from public.projects where id = p_project_id;
+  if not found then raise exception 'Project not found' using errcode = 'P0002'; end if;
+  if not public.can_manage_department(project_department) then raise exception 'You cannot manage this project' using errcode = '42501'; end if;
+  delete from public.task_members tm using public.tasks t
+  where tm.task_id = t.id and t.project_id = p_project_id and tm.user_id = p_user_id;
+  delete from public.project_members where project_id = p_project_id and user_id = p_user_id;
+  get diagnostics affected = row_count;
+  if affected = 0 then raise exception 'Project membership not found' using errcode = 'P0002'; end if;
+end;
+$$;
+
+create or replace function public.remove_task_member(p_task_id uuid, p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare project_department text; affected integer;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  select p.department into project_department from public.tasks t join public.projects p on p.id = t.project_id where t.id = p_task_id;
+  if not found then raise exception 'Task not found' using errcode = 'P0002'; end if;
+  if not public.can_manage_department(project_department) then raise exception 'You cannot manage this task' using errcode = '42501'; end if;
+  delete from public.task_members where task_id = p_task_id and user_id = p_user_id;
+  get diagnostics affected = row_count;
+  if affected = 0 then raise exception 'Task membership not found' using errcode = 'P0002'; end if;
+end;
+$$;
+
+revoke all on function public.assign_project_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.assign_task_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.remove_project_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.remove_task_member(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.assign_project_member(uuid, uuid) to authenticated;
+grant execute on function public.assign_task_member(uuid, uuid) to authenticated;
+grant execute on function public.remove_project_member(uuid, uuid) to authenticated;
+grant execute on function public.remove_task_member(uuid, uuid) to authenticated;
+
+
 create or replace function public.can_access_task(p_task_id uuid)
 returns boolean language sql stable security definer set search_path = public
 as $$
