@@ -1,19 +1,24 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import {
-  Activity, AlertCircle, ArrowLeft, ArrowUpLeft, Bell, CalendarDays, Check, CheckCheck,
-  ChevronDown, ChevronLeft, CircleHelp, Clock3, Crown, Flag, FolderKanban,
-  Gem, LayoutDashboard, LogIn, LogOut, Menu, MessageSquareWarning, Plus, Send,
-  Settings2, ShieldCheck, Sparkles, Target, Users, X, Zap, Ban, CalendarPlus, UserPlus,
-  ClipboardList, CircleDot, Search, Layers3, Briefcase, BarChart3, UserMinus,
-  Pencil, Trash2, ChevronRight,
-} from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { LogOut, ShieldCheck } from 'lucide-react';
 import { supabase, isSupabaseConfigured } from './lib/supabase';
-import {
-  DEPARTMENTS, ROLE_LABELS, PROJECT_STATUS, TASK_STATUS, PRIORITY, REQUEST_STATUS,
-  normalizePhone, phoneToAuthEmail, getDepartment, initials, faDate, isManager,
-} from './lib/helpers';
+import { isManager } from './lib/helpers';
+import { BrandMark, ConfirmDialog, ErrorBoundary, LoadingScreen, Toast } from './components/ui';
+import { Landing, AuthModal } from './components/Landing';
+import { Sidebar, Topbar } from './components/Shell';
+import ActionDialog from './components/Dialogs';
+import OverviewPage from './pages/Overview';
+import ProjectsPage from './pages/Projects';
+import TasksPage from './pages/Tasks';
+import CalendarPage from './pages/Calendar';
+import TeamsPage from './pages/Teams';
+import ReportsPage from './pages/Reports';
+import MembersPage from './pages/Members';
+import SettingsPage from './pages/Settings';
 
 const EMPTY_DATA = { profiles: [], publicMembers: [], projects: [], tasks: [], events: [], reports: [], projectMembers: [], taskMembers: [] };
+const PAGES = ['overview', 'projects', 'tasks', 'calendar', 'teams', 'reports', 'members', 'settings'];
+const STALE_AFTER_MS = 45000;
+const pageFromHash = () => { const id = window.location.hash.replace('#', ''); return PAGES.includes(id) ? id : 'overview'; };
 
 export default function App() {
   const [session, setSession] = useState(null);
@@ -24,18 +29,40 @@ export default function App() {
   const [data, setData] = useState(EMPTY_DATA);
   const [dataLoading, setDataLoading] = useState(false);
   const [landingMembers, setLandingMembers] = useState([]);
-  const [activePage, setActivePage] = useState('overview');
+  const [activePage, setActivePageState] = useState(pageFromHash);
   const [mobileNav, setMobileNav] = useState(false);
   const [authMode, setAuthMode] = useState(null);
   const [dialog, setDialog] = useState(null);
   const [confirmDialog, setConfirmDialog] = useState(null);
   const [toast, setToast] = useState(null);
-  const [searchTerm, setSearchTerm] = useState('');
+  const toastTimer = useRef(null);
+  const lastLoadedAt = useRef(0);
 
+  // The previous timer was never cleared, so an old toast could dismiss a newer one early.
   const notify = useCallback((message, type = 'success') => {
+    window.clearTimeout(toastTimer.current);
     setToast({ message, type, key: Date.now() });
-    window.setTimeout(() => setToast(null), 4200);
+    toastTimer.current = window.setTimeout(() => setToast(null), 4200);
   }, []);
+  useEffect(() => () => window.clearTimeout(toastTimer.current), []);
+
+  const setActivePage = useCallback((page) => {
+    setActivePageState(page);
+    setMobileNav(false);
+    if (window.location.hash !== `#${page}`) window.history.replaceState(null, '', `#${page}`);
+    window.scrollTo({ top: 0 });
+  }, []);
+  useEffect(() => {
+    const onHash = () => setActivePageState(pageFromHash());
+    window.addEventListener('hashchange', onHash);
+    return () => window.removeEventListener('hashchange', onHash);
+  }, []);
+  useEffect(() => {
+    if (!mobileNav) return undefined;
+    const onKey = (event) => { if (event.key === 'Escape') setMobileNav(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [mobileNav]);
 
   const loadProfile = useCallback(async (userId) => {
     if (!supabase || !userId) return;
@@ -83,13 +110,17 @@ export default function App() {
         supabase.from('task_members').select('*').order('requested_at', { ascending: false }),
         supabase.rpc('list_public_members'),
       ]);
-      const next = { ...EMPTY_DATA };
       const keys = ['profiles', 'projects', 'tasks', 'events', 'reports', 'projectMembers', 'taskMembers', 'publicMembers'];
-      results.forEach((result, index) => {
-        if (!result.error && Array.isArray(result.data)) next[keys[index]] = result.data;
-        else if (result.error && index === 0) console.warn('profiles query:', result.error.message);
+      // Keep the previous rows for any query that failed instead of silently emptying that section.
+      setData((previous) => {
+        const next = { ...previous };
+        results.forEach((result, index) => {
+          if (!result.error && Array.isArray(result.data)) next[keys[index]] = result.data;
+          else if (result.error) console.warn(`${keys[index]} query:`, result.error.message);
+        });
+        return next;
       });
-      setData(next);
+      lastLoadedAt.current = Date.now();
     } catch (error) {
       console.error('Could not load NOWERA data:', error);
       notify('دریافت داده‌ها از Supabase ناموفق بود. اتصال را بررسی و دوباره تلاش کن.', 'error');
@@ -100,13 +131,8 @@ export default function App() {
 
   useEffect(() => {
     if (!supabase) { setAuthLoading(false); return undefined; }
-    supabase.auth.getSession().then(({ data: result }) => {
-      setSession(result.session);
-      setAuthLoading(false);
-    }).catch(() => setAuthLoading(false));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => {
-      setSession(nextSession);
-    });
+    supabase.auth.getSession().then(({ data: result }) => { setSession(result.session); setAuthLoading(false); }).catch(() => setAuthLoading(false));
+    const { data: listener } = supabase.auth.onAuthStateChange((_event, nextSession) => setSession(nextSession));
     return () => listener.subscription.unsubscribe();
   }, []);
 
@@ -117,15 +143,21 @@ export default function App() {
 
   useEffect(() => { if (profile?.id && profile.is_active) loadData(); }, [profile?.id, profile?.is_active, loadData]);
 
+  // Pull fresh data when the user comes back to the tab, so two admins stay roughly in sync.
+  useEffect(() => {
+    if (!profile?.is_active) return undefined;
+    const onVisible = () => { if (document.visibilityState === 'visible' && Date.now() - lastLoadedAt.current > STALE_AFTER_MS) loadData(); };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => document.removeEventListener('visibilitychange', onVisible);
+  }, [profile?.is_active, loadData]);
+
   const loadLandingMembers = useCallback(async () => {
     if (!supabase) return;
     try {
       const { data: rows, error } = await supabase.rpc('list_public_members');
       if (!error && Array.isArray(rows)) setLandingMembers(rows);
       else if (error) console.warn('Public member directory is unavailable:', error.message);
-    } catch (error) {
-      console.warn('Could not connect to Supabase for the public member directory:', error);
-    }
+    } catch (error) { console.warn('Could not connect to Supabase for the public member directory:', error); }
   }, []);
   useEffect(() => { loadLandingMembers(); }, [loadLandingMembers]);
 
@@ -134,140 +166,96 @@ export default function App() {
     setSession(null); setProfile(null); setData(EMPTY_DATA); setActivePage('overview');
     notify('با موفقیت خارج شدید.');
   };
-
-  const refresh = async () => {
-    await loadData();
-    await loadLandingMembers();
-  };
+  const refresh = useCallback(async () => { await loadData(); }, [loadData]);
 
   const runMutation = async (operation, successMessage, requireAffectedRow = false) => {
     if (!supabase) { notify('ابتدا اتصال Supabase را در فایل .env تنظیم کنید.', 'error'); return false; }
     try {
       const { data: result, error } = await operation();
       if (error) { notify(explainError(error), 'error'); return false; }
-      if (requireAffectedRow && !result) {
-        notify('هیچ موردی تغییر نکرد؛ ممکن است دسترسی لازم را نداشته باشی یا مورد قبلاً تغییر کرده باشد.', 'error');
-        return false;
-      }
-      notify(successMessage);
-      await refresh();
-      return true;
-    } catch (error) {
-      notify(explainError(error), 'error');
-      return false;
-    }
-  };
-
-  const createProject = async (form) => runMutation(() => supabase.from('projects').insert({
-    department: form.department, title: form.title.trim(), description: form.description.trim(),
-    status: form.status, deadline: form.deadline || null, created_by: profile.id,
-  }), 'پروژه جدید ساخته شد.');
-
-  const createTask = async (form) => runMutation(() => supabase.from('tasks').insert({
-    project_id: form.project_id, title: form.title.trim(), description: form.description.trim(),
-    priority: form.priority, status: form.status || 'todo', due_date: form.due_date || null, created_by: profile.id,
-  }), 'تسک جدید ساخته شد.');
-
-  const createEvent = async (form) => runMutation(() => supabase.from('events').insert({
-    department: form.department, title: form.title.trim(), details: form.details.trim(),
-    event_date: new Date(form.event_date).toISOString(), created_by: profile.id,
-  }), 'رویداد به تقویم اضافه شد.');
-
-  const createReport = async (form) => runMutation(() => supabase.from('reports').insert({
-    reporter_id: profile.id, department: form.department, target_admin_id: form.target_admin_id || null,
-    title: form.title.trim(), message: form.message.trim(),
-  }), 'گزارش شما به‌صورت محرمانه ثبت شد.');
-
-  const requestProject = async (projectId) => {
-    const existing = data.projectMembers.find((row) => row.project_id === projectId && row.user_id === profile.id);
-    if (existing?.status === 'approved') return notify('عضویت شما در این پروژه تأیید شده است.', 'info');
-    if (existing?.status === 'pending') return notify('درخواست شما هنوز بررسی نشده است.', 'info');
-    if (existing?.status === 'rejected') {
-      const removed = await supabase.from('project_members').delete().eq('id', existing.id);
-      if (removed.error) return notify(explainError(removed.error), 'error');
-    }
-    await runMutation(() => supabase.from('project_members').insert({ project_id: projectId, user_id: profile.id, status: 'pending' }), 'درخواست همکاری برای مدیر بخش ارسال شد.');
-  };
-
-  const requestTask = async (taskId) => {
-    const existing = data.taskMembers.find((row) => row.task_id === taskId && row.user_id === profile.id);
-    if (existing?.status === 'approved') return notify('این تسک به شما تخصیص داده شده است.', 'info');
-    if (existing?.status === 'pending') return notify('درخواست تسک در انتظار بررسی است.', 'info');
-    if (existing?.status === 'rejected') {
-      const removed = await supabase.from('task_members').delete().eq('id', existing.id);
-      if (removed.error) return notify(explainError(removed.error), 'error');
-    }
-    await runMutation(() => supabase.from('task_members').insert({ task_id: taskId, user_id: profile.id, status: 'pending' }), 'درخواست دریافت تسک ثبت شد.');
-  };
-
-  const decideRequest = async (kind, id, status) => {
-    const table = kind === 'project' ? 'project_members' : 'task_members';
-    return runMutation(
-      () => supabase.from(table).update({ status, decided_by: profile.id, decided_at: new Date().toISOString() }).eq('id', id).select('id').maybeSingle(),
-      status === 'approved' ? 'درخواست تأیید شد.' : 'درخواست رد شد.',
-      true,
-    );
-  };
-
-  const updateTask = async (taskId, patch) => runMutation(() => supabase.from('tasks').update(patch).eq('id', taskId).select('id').maybeSingle(), 'تغییرات تسک ذخیره شد.', true);
-  const updateProject = async (projectId, patch) => runMutation(() => supabase.from('projects').update(patch).eq('id', projectId).select('id').maybeSingle(), 'اطلاعات پروژه به‌روزرسانی شد.', true);
-  const updateReport = async (reportId, status) => runMutation(() => supabase.from('reports').update({ status, reviewed_by: profile.id, reviewed_at: new Date().toISOString() }).eq('id', reportId).select('id').maybeSingle(), 'وضعیت گزارش تغییر کرد.', true);
-
-  // Verify that RLS actually affected a row; a zero-row delete must never look successful.
-  const runDelete = async (operation, successMessage) => {
-    if (!supabase) { notify('اتصال Supabase در دسترس نیست.', 'error'); return false; }
-    try {
-      const { data: deleted, error } = await operation();
-      if (error) { notify(explainError(error), 'error'); return false; }
-      if (!deleted) { notify('این مورد حذف نشد؛ ممکن است دسترسی لازم را نداشته باشی یا مورد قبلاً تغییر کرده باشد.', 'error'); return false; }
-      notify(successMessage);
+      if (requireAffectedRow && !result) { notify('هیچ موردی تغییر نکرد؛ ممکن است دسترسی لازم را نداشته باشی یا مورد قبلاً تغییر کرده باشد.', 'error'); return false; }
+      if (successMessage) notify(successMessage);
       await refresh();
       return true;
     } catch (error) { notify(explainError(error), 'error'); return false; }
   };
-  const deleteProject = (projectId) => runDelete(
-    () => supabase.from('projects').delete().eq('id', projectId).select('id').maybeSingle(),
-    'پروژه و تسک‌ها و عضویت‌های وابسته حذف شدند.'
-  );
-  const deleteTask = (taskId) => runDelete(
-    () => supabase.from('tasks').delete().eq('id', taskId).select('id').maybeSingle(),
-    'تسک حذف شد.'
-  );
-  const deleteEvent = (eventId) => runDelete(
-    () => supabase.from('events').delete().eq('id', eventId).select('id').maybeSingle(),
-    'رویداد حذف شد.'
-  );
-  const assignProjectMember = (projectId, userId) => runMutation(
-    () => supabase.rpc('assign_project_member', { p_project_id: projectId, p_user_id: userId }),
-    'عضو مستقیماً به پروژه اضافه شد.'
-  );
-  const assignTaskMember = (taskId, userId) => runMutation(
-    () => supabase.rpc('assign_task_member', { p_task_id: taskId, p_user_id: userId }),
-    'عضو مستقیماً به تسک تخصیص داده شد.'
-  );
-  const removeProjectMember = (projectId, userId) => runMutation(
-    () => supabase.rpc('remove_project_member', { p_project_id: projectId, p_user_id: userId }),
-    'عضو و تخصیص‌های تسک او از این پروژه برداشته شد.'
-  );
-  const removeTaskMember = (taskId, userId) => runMutation(
-    () => supabase.rpc('remove_task_member', { p_task_id: taskId, p_user_id: userId }),
-    'عضو از این تسک خارج شد.'
-  );
 
-  const assignAdmin = async (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت بخش اعطا شد.', true);
-  const revokeAdmin = async (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت لغو شد.', true);
-  // Use a database-side, authorization-checked RPC so an RLS/no-op update cannot look successful.
-  const deactivateMember = async (userId) => runMutation(
-    () => supabase.rpc('deactivate_member', { p_user_id: userId }),
-    'دسترسی عضو بسته شد و او از فهرست اعضای فعال خارج شد.'
-  );
+  // A zero-row delete must never look successful.
+  const runDelete = (operation, successMessage) => runMutation(operation, successMessage, true);
+
+  const createProject = (form) => runMutation(() => supabase.from('projects').insert({ department: form.department, title: form.title.trim(), description: form.description.trim(), status: form.status, deadline: form.deadline || null, created_by: profile.id }), 'پروژه جدید ساخته شد.');
+  const createTask = (form) => runMutation(() => supabase.from('tasks').insert({ project_id: form.project_id, title: form.title.trim(), description: form.description.trim(), priority: form.priority, status: form.status || 'todo', due_date: form.due_date || null, created_by: profile.id }), 'تسک جدید ساخته شد.');
+  const createEvent = (form) => runMutation(() => supabase.from('events').insert({ department: form.department, title: form.title.trim(), details: form.details.trim(), event_date: new Date(form.event_date).toISOString(), created_by: profile.id }), 'رویداد به تقویم اضافه شد.');
+  const createReport = (form) => runMutation(() => supabase.from('reports').insert({ reporter_id: profile.id, department: form.department, target_admin_id: form.target_admin_id || null, title: form.title.trim(), message: form.message.trim() }), 'گزارش شما به‌صورت محرمانه ثبت شد.');
+
+  const requestMembership = async (table, column, id, existingRow, messages) => {
+    if (existingRow?.status === 'approved') return notify(messages.approved, 'info');
+    if (existingRow?.status === 'pending') return notify(messages.pending, 'info');
+    if (existingRow?.status === 'rejected') {
+      const removed = await supabase.from(table).delete().eq('id', existingRow.id);
+      if (removed.error) return notify(explainError(removed.error), 'error');
+    }
+    return runMutation(() => supabase.from(table).insert({ [column]: id, user_id: profile.id, status: 'pending' }), messages.sent);
+  };
+  const requestProject = (projectId) => requestMembership('project_members', 'project_id', projectId, data.projectMembers.find((r) => r.project_id === projectId && r.user_id === profile.id), { approved: 'عضویت شما در این پروژه تأیید شده است.', pending: 'درخواست شما هنوز بررسی نشده است.', sent: 'درخواست همکاری برای مدیر بخش ارسال شد.' });
+  const requestTask = (taskId) => requestMembership('task_members', 'task_id', taskId, data.taskMembers.find((r) => r.task_id === taskId && r.user_id === profile.id), { approved: 'این تسک به شما تخصیص داده شده است.', pending: 'درخواست تسک در انتظار بررسی است.', sent: 'درخواست دریافت تسک ثبت شد.' });
+
+  const decideRequest = (kind, id, status) => runMutation(
+    () => supabase.from(kind === 'project' ? 'project_members' : 'task_members').update({ status, decided_by: profile.id, decided_at: new Date().toISOString() }).eq('id', id).select('id').maybeSingle(),
+    status === 'approved' ? 'درخواست تأیید شد.' : 'درخواست رد شد.', true);
+
+  const updateTask = (taskId, patch) => runMutation(() => supabase.from('tasks').update(patch).eq('id', taskId).select('id').maybeSingle(), 'تغییرات تسک ذخیره شد.', true);
+  const updateProject = (projectId, patch) => runMutation(() => supabase.from('projects').update(patch).eq('id', projectId).select('id').maybeSingle(), 'اطلاعات پروژه به‌روزرسانی شد.', true);
+  const updateEvent = (eventId, patch) => runMutation(() => supabase.from('events').update(patch).eq('id', eventId).select('id').maybeSingle(), 'رویداد به‌روزرسانی شد.', true);
+  const updateReport = (reportId, status) => runMutation(() => supabase.from('reports').update({ status, reviewed_by: profile.id, reviewed_at: new Date().toISOString() }).eq('id', reportId).select('id').maybeSingle(), 'وضعیت گزارش تغییر کرد.', true);
+
+  // Optimistic: the card moves instantly; if the database refuses, it snaps back.
+  const moveTask = async (taskId, status) => {
+    const before = data.tasks.find((t) => t.id === taskId);
+    if (!before || before.status === status) return;
+    setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === taskId ? { ...t, status } : t)) }));
+    const ok = await runMutation(() => supabase.from('tasks').update({ status }).eq('id', taskId).select('id').maybeSingle(), 'وضعیت تسک تغییر کرد.', true);
+    if (!ok) setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === taskId ? before : t)) }));
+  };
+
+  const deleteProject = (id) => runDelete(() => supabase.from('projects').delete().eq('id', id).select('id').maybeSingle(), 'پروژه و تسک‌ها و عضویت‌های وابسته حذف شدند.');
+  const deleteTask = (id) => runDelete(() => supabase.from('tasks').delete().eq('id', id).select('id').maybeSingle(), 'تسک حذف شد.');
+  const deleteEvent = (id) => runDelete(() => supabase.from('events').delete().eq('id', id).select('id').maybeSingle(), 'رویداد حذف شد.');
+  const deleteReport = (id) => runDelete(() => supabase.from('reports').delete().eq('id', id).select('id').maybeSingle(), 'گزارش حذف شد.');
+  const clearDoneTasks = (projectId) => runMutation(async () => {
+    const result = await supabase.from('tasks').delete().eq('project_id', projectId).eq('status', 'done').select('id');
+    if (!result.error && !(result.data || []).length) return { data: null, error: { message: 'تسک تکمیل‌شده‌ای برای پاک‌سازی وجود نداشت.' } };
+    return result;
+  }, 'تسک‌های تکمیل‌شده پاک شدند.');
+
+  const rpc = (name, args, message) => runMutation(() => supabase.rpc(name, args), message);
+  const assignProjectMember = (projectId, userId) => rpc('assign_project_member', { p_project_id: projectId, p_user_id: userId }, 'عضو مستقیماً به پروژه اضافه شد.');
+  const assignTaskMember = (taskId, userId) => rpc('assign_task_member', { p_task_id: taskId, p_user_id: userId }, 'عضو مستقیماً به تسک تخصیص داده شد.');
+  const removeProjectMember = (projectId, userId) => rpc('remove_project_member', { p_project_id: projectId, p_user_id: userId }, 'عضو و تخصیص‌های تسک او از این پروژه برداشته شد.');
+  const removeTaskMember = (taskId, userId) => rpc('remove_task_member', { p_task_id: taskId, p_user_id: userId }, 'عضو از این تسک خارج شد.');
+  const deactivateMember = (userId) => rpc('deactivate_member', { p_user_id: userId }, 'دسترسی عضو بسته شد.');
+  const reactivateMember = (userId) => rpc('reactivate_member', { p_user_id: userId }, 'دسترسی عضو بازگردانده شد.');
+  const changeMemberDepartment = (userId, department) => rpc('change_member_department', { p_user_id: userId, p_department: department }, 'عضو به بخش جدید منتقل شد.');
+  const assignAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت بخش اعطا شد.', true);
+  const revokeAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت لغو شد.', true);
 
   const commonProps = {
-    profile, data, notify, refresh, openDialog: setDialog, confirmAction: setConfirmDialog,
-    requestProject, requestTask, decideRequest, updateTask, updateProject, deleteEvent,
-    deleteProject, deleteTask, assignProjectMember, assignTaskMember, removeProjectMember, removeTaskMember,
-    updateReport, assignAdmin, revokeAdmin, deactivateMember, searchTerm, setSearchTerm,
+    profile, data, notify, refresh, openDialog: setDialog, confirmAction: setConfirmDialog, setActivePage,
+    requestProject, requestTask, decideRequest, updateTask, updateProject, updateEvent, moveTask,
+    deleteProject, deleteTask, deleteEvent, deleteReport, clearDoneTasks,
+    assignProjectMember, assignTaskMember, removeProjectMember, removeTaskMember,
+    updateReport, assignAdmin, revokeAdmin, deactivateMember, reactivateMember, changeMemberDepartment, signOut,
   };
+
+  const badges = useMemo(() => {
+    if (!profile || profile.role === 'member') return {};
+    const projectById = Object.fromEntries(data.projects.map((p) => [p.id, p]));
+    const taskById = Object.fromEntries(data.tasks.map((t) => [t.id, t]));
+    const pendingProjects = data.projectMembers.filter((r) => r.status === 'pending' && isManager(profile, projectById[r.project_id]?.department)).length;
+    const pendingTasks = data.taskMembers.filter((r) => r.status === 'pending' && isManager(profile, projectById[taskById[r.task_id]?.project_id]?.department)).length;
+    const newReports = profile.role === 'super_admin' ? data.reports.filter((r) => r.status === 'new').length : 0;
+    return { projects: pendingProjects || null, tasks: pendingTasks || null, reports: newReports || null };
+  }, [data, profile]);
 
   if (authLoading || (session?.user?.id && profileLoading)) return <LoadingScreen />;
 
@@ -283,25 +271,23 @@ export default function App() {
     </>;
   }
 
-  return <div className="app-shell">
-    <Sidebar activePage={activePage} setActivePage={(page) => { setActivePage(page); setMobileNav(false); }} profile={profile} mobileNav={mobileNav} setMobileNav={setMobileNav} signOut={signOut} />
-    {mobileNav && <button className="nav-scrim" aria-label="بستن منو" onClick={() => setMobileNav(false)} />}
-    <main className="workspace">
+  const Page = { overview: OverviewPage, projects: ProjectsPage, tasks: TasksPage, calendar: CalendarPage, teams: TeamsPage, reports: ReportsPage, members: MembersPage, settings: SettingsPage }[activePage] || OverviewPage;
+  const allowed = activePage !== 'members' || profile.role !== 'member';
+
+  return <div className="nv-app">
+    <Sidebar activePage={activePage} setActivePage={setActivePage} profile={profile} mobileNav={mobileNav} setMobileNav={setMobileNav} signOut={signOut} badges={badges} />
+    {mobileNav && <button className="nv-scrim" aria-label="بستن منو" onClick={() => setMobileNav(false)} />}
+    <main className="nv-main">
       <Topbar profile={profile} dataLoading={dataLoading} setMobileNav={setMobileNav} onRefresh={refresh} activePage={activePage} />
       {profileError && <div className="inline-error">{profileError}</div>}
-      <div className="page-wrap">
-        {activePage === 'overview' && <OverviewPage {...commonProps} setActivePage={setActivePage} />}
-        {activePage === 'projects' && <ProjectsPage {...commonProps} />}
-        {activePage === 'tasks' && <TasksPage {...commonProps} />}
-        {activePage === 'calendar' && <CalendarPage {...commonProps} />}
-        {activePage === 'teams' && <TeamsPage {...commonProps} />}
-        {activePage === 'reports' && <ReportsPage {...commonProps} />}
-        {activePage === 'members' && <MembersPage {...commonProps} />}
-        {activePage === 'settings' && <SettingsPage {...commonProps} signOut={signOut} />}
+      <div className="nv-page">
+        <ErrorBoundary resetKey={activePage}>
+          <div key={activePage} className="nv-page-enter">{allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
+        </ErrorBoundary>
       </div>
-      <footer className="app-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.2 · فضای یکپارچه تیم</span></footer>
+      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.3 · فضای یکپارچه تیم</span></footer>
     </main>
-    {dialog && <ActionDialog dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask }} />}
+    {dialog && <ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} />}
     {confirmDialog && <ConfirmDialog dialog={confirmDialog} close={() => setConfirmDialog(null)} />}
     {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
   </div>;
@@ -310,598 +296,16 @@ export default function App() {
 function explainError(error) {
   const message = error?.message || String(error || 'خطای نامشخص');
   if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|timeout/i.test(message)) return 'ارتباط با Supabase برقرار نشد. اینترنت/VPN، آدرس پروژه و کلید را بررسی کن و npm run diagnose را اجرا کن.';
-  if (/deactivate_member|assign_project_member|assign_task_member|remove_project_member|remove_task_member|PGRST202|schema cache/i.test(message)) return 'نسخه دیتابیس هنوز به‌روز نشده است؛ فایل کامل supabase/schema.sql جدید را در SQL Editor اجرا کن و سپس دوباره تلاش کن.';
-  if (/row-level security|permission denied|insufficient privilege|42501/i.test(message)) return 'دسترسی این عملیات برای نقش فعلی مجاز نیست.';
+  if (/deactivate_member|reactivate_member|change_member_department|assign_project_member|assign_task_member|remove_project_member|remove_task_member|PGRST202|schema cache/i.test(message)) return 'نسخه دیتابیس هنوز به‌روز نشده است؛ فایل کامل supabase/schema.sql جدید را در SQL Editor اجرا کن و سپس دوباره تلاش کن.';
+  if (/row-level security|permission denied|insufficient privilege|42501/i.test(message) && !/only the super admin|cannot/i.test(message)) return 'دسترسی این عملیات برای نقش فعلی مجاز نیست.';
   if (/only the super admin or the target department admin/i.test(message)) return 'این عملیات فقط برای مدیر اصلی یا مدیر همان بخش مجاز است.';
-  if (/only the super admin|only super.admin/i.test(message)) return 'فقط مدیر اصلی می‌تواند دسترسی عضو را حذف کند.';
-  if (/cannot remove your own|own account/i.test(message)) return 'برای جلوگیری از قفل‌شدن پنل، امکان حذف دسترسی حساب خودت وجود ندارد.';
-  if (/super admin account cannot be removed|cannot deactivate a super.admin/i.test(message)) return 'حساب مدیر اصلی از داخل پنل قابل حذف نیست.';
+  if (/only the super admin|only super.admin/i.test(message)) return 'این عملیات فقط برای مدیر اصلی مجاز است.';
+  if (/cannot remove your own|own account/i.test(message)) return 'برای جلوگیری از قفل‌شدن پنل، امکان تغییر دسترسی حساب خودت وجود ندارد.';
+  if (/super admin account cannot be (removed|moved)|cannot deactivate a super.admin/i.test(message)) return 'حساب مدیر اصلی از داخل پنل قابل تغییر نیست.';
   if (/member not found|project not found|task not found|membership not found|could not be updated/i.test(message)) return 'عضو، پروژه یا تسک پیدا نشد یا وضعیت آن تغییر کرده است؛ فهرست را تازه‌سازی و دوباره بررسی کن.';
   if (/only an active team member/i.test(message)) return 'فقط اعضای فعال و عادی تیم قابل تخصیص هستند.';
   if (/must be an approved project participant/i.test(message)) return 'برای تخصیص تسک، ابتدا باید عضویت فرد در همان پروژه تأیید شده باشد.';
   if (/duplicate key|already exists/i.test(message)) return 'این درخواست قبلاً ثبت شده است.';
   if (/JWT|session/i.test(message)) return 'نشست شما معتبر نیست؛ خارج شو و دوباره وارد شو.';
   return message;
-}
-
-function BrandMark({ small = false }) {
-  return <div className={`brand-lockup ${small ? 'brand-lockup-small' : ''}`}><img src="/brands/nowera-symbol.png" alt="NOWERA" /><div><b>NOWERA</b><span>MANAGEMENT SPACE</span></div></div>;
-}
-
-function LoadingScreen() {
-  return <div className="loading-screen"><div className="loading-orbit"><span /></div><BrandMark /><p>در حال آماده‌سازی فضای کاری شما…</p></div>;
-}
-
-function Landing({ members, openAuth, connectionReady }) {
-  const [activeDept, setActiveDept] = useState('Technoplus');
-  return <div className="landing-page">
-    <header className="landing-nav">
-      <BrandMark small />
-      <nav><a href="#about">درباره نَوِرا</a><a href="#departments">تیم‌ها</a><a href="#members">اعضا</a></nav>
-      <div className="landing-actions"><button className="button button-ghost" onClick={() => openAuth('login')}><LogIn size={16} /> ورود</button><button className="button button-primary" onClick={() => openAuth('signup')}>عضویت در نَوِرا <ArrowUpLeft size={16} /></button></div>
-    </header>
-    {!connectionReady && <div className="connection-notice"><AlertCircle size={17} /><span><strong>اتصال دیتابیس هنوز تنظیم نشده است.</strong> در پوشه پروژه دستور <code>npm run setup</code> را اجرا کن؛ سپس <code>npm run diagnose</code> اتصال را بررسی می‌کند.</span></div>}
-    <section className="hero-section" id="about">
-      <div className="hero-orb hero-orb-one" /><div className="hero-orb hero-orb-two" />
-      <div className="hero-copy"><div className="eyebrow"><span className="eyebrow-dot" /> یک ساختار، چهار تخصص، یک مسیر</div><h1>با هم می‌سازیم؛<br /><span>بزرگ‌تر از مجموع</span><br />توانایی‌هایمان.</h1><p className="hero-description">NOWERA خانه‌ی تیم‌هایی‌ست که با تخصص‌های متفاوت، برای یک چشم‌انداز مشترک کار می‌کنند. از ایده تا اجرا، همه‌چیز در یک فضای هماهنگ.</p>
-        <div className="hero-buttons"><button className="button button-primary button-large" onClick={() => openAuth('signup')}>شروع همکاری <ArrowLeft size={17} /></button><a href="#departments" className="button button-ghost button-large">کشف تیم‌ها <ChevronDown size={16} /></a></div>
-        <div className="hero-proof"><div className="proof-avatars">{['N','L','T','A'].map((s, i) => <span key={s} style={{ '--i': i }}>{s}</span>)}</div><div><strong>{members.length ? toFaDigits(members.length) : '۴'} <small>+</small></strong><span>تخصص‌های مکمل، یک تیم</span></div><div className="proof-divider" /><div><strong>۰۱</strong><span>چشم‌انداز مشترک</span></div></div>
-      </div>
-      <div className="hero-visual"><div className="visual-grid" /><div className="orbit orbit-a" /><div className="orbit orbit-b" /><div className="hero-logo-frame"><img src="/brands/nowera.png" alt="نشان نَوِرا" /></div><div className="floating-card float-card-top"><span className="float-spark"><Sparkles size={16} /></span><div><b>One Vision</b><small>هم‌جهت، هم‌قدم</small></div></div><div className="floating-card float-card-bottom"><div className="mini-bars"><i /><i /><i /><i /></div><div><b>Multiple Powers</b><small>چهار بازوی تخصصی</small></div></div><span className="visual-caption">EST. FOR WHAT'S NEXT</span></div>
-      <div className="hero-bottom-line"><span>01 / 04</span><div><i /></div><span>SCROLL TO EXPLORE</span></div>
-    </section>
-    <section className="values-section"><div className="section-heading"><span className="section-kicker">HOW WE WORK</span><h2>ساختار منظم برای <span>ایده‌های بزرگ</span></h2><p>از هماهنگی روزانه تا تحویل پروژه؛ هر بخش ابزار مناسب خودش را دارد و در عین حال با بقیه تیم‌ها در ارتباط است.</p></div><div className="values-grid"><ValueCard number="01" icon={<Target />} title="هدف مشترک" desc="همه تیم‌ها در یک مسیر و با اولویت‌های شفاف حرکت می‌کنند." /><ValueCard number="02" icon={<Layers3 />} title="تخصص مستقل" desc="هر بخش هویت، فرآیند و فضای کاری متناسب با خودش را دارد." /><ValueCard number="03" icon={<BarChart3 />} title="پیشرفت قابل پیگیری" desc="پروژه، تسک، ضرب‌الاجل و رویدادها در یک نمای یکپارچه." /></div></section>
-    <section className="departments-section" id="departments"><div className="section-heading section-heading-row"><div><span className="section-kicker">THE FOUR DIVISIONS</span><h2>چهار تیم. <span>یک نَوِرا.</span></h2></div><p>تخصصت را پیدا کن و به تیمی بپیوند که برای رشدت فضا می‌سازد.</p></div><div className="department-showcase">{DEPARTMENTS.map((department, i) => <DepartmentCard key={department.id} department={department} index={i} active={activeDept === department.id} setActive={() => setActiveDept(department.id)} openAuth={openAuth} />)}</div><div className="department-detail-strip" style={{ '--dept-color': getDepartment(activeDept).color }}><div className="detail-mark"><img src={getDepartment(activeDept).logo} alt="" /></div><div><span className="section-kicker">MEET {getDepartment(activeDept).english.toUpperCase()}</span><h3>{getDepartment(activeDept).name}</h3><p>{getDepartment(activeDept).tagline}؛ بخشی از یک سیستم هماهنگ که برای خروجی بهتر کنار هم قرار گرفته‌اند.</p></div><button className="button button-outline" onClick={() => openAuth('signup')}>عضویت در {getDepartment(activeDept).name} <ArrowLeft size={16} /></button></div></section>
-    <section className="members-section" id="members"><div className="section-heading section-heading-row"><div><span className="section-kicker">THE PEOPLE BEHIND IT</span><h2>آدم‌ها، <span>مهم‌ترین بخش ما</span></h2></div><p>هر پروژه با آدم‌هایی جلو می‌رود که دانش و مسئولیتشان را با هم به اشتراک می‌گذارند.</p></div>{members.length ? <div className="public-members-grid">{members.slice(0, 8).map((member) => <MemberMiniCard key={member.id} member={member} />)}</div> : <div className="members-empty"><div className="empty-icon"><Users size={25} /></div><h3>جای تو هم اینجاست</h3><p>بعد از راه‌اندازی سیستم، اعضای فعال نَوِرا در این بخش نمایش داده می‌شوند.</p><button className="text-button" onClick={() => openAuth('signup')}>اولین قدم را بردار <ArrowLeft size={15} /></button></div>}</section>
-    <section className="closing-cta"><div className="cta-glow" /><div className="cta-content"><span className="section-kicker">YOUR NEXT CHAPTER STARTS HERE</span><h2>برای ساختن چیزهای <span>بزرگ‌تر</span><br />به ما بپیوند.</h2><p>حضور هر عضو، یک قدرت تازه به این مجموعه اضافه می‌کند.</p><button className="button button-primary button-large" onClick={() => openAuth('signup')}>عضویت در نَوِرا <ArrowLeft size={17} /></button></div><div className="cta-watermark">N.</div></section>
-    <footer className="landing-footer"><BrandMark small /><span>© NOWERA · ONE VISION. MULTIPLE POWERS.</span><div><a href="#about">درباره ما</a><button onClick={() => openAuth('login')}>ورود اعضا</button></div></footer>
-  </div>;
-}
-
-function ValueCard({ number, icon, title, desc }) {
-  return <article className="value-card"><div className="value-card-top"><span>{number}</span><div className="value-icon">{icon}</div></div><h3>{title}</h3><p>{desc}</p><div className="value-card-line" /></article>;
-}
-
-function DepartmentCard({ department, index, active, setActive, openAuth }) {
-  return <article className={`department-card ${active ? 'department-card-active' : ''}`} style={{ '--dept-color': department.color, '--dept-glow': department.glow }} onClick={setActive}>
-    <div className="department-card-top"><span>0{index + 1}</span><span className="dept-dot" /></div><div className="dept-logo-holder"><img src={department.logo} alt={`${department.english} logo`} /></div><div className="dept-card-copy"><span className="dept-english">{department.english}</span><h3>{department.name}</h3><p>{department.tagline}</p></div><div className="dept-card-bottom"><span>EXPLORE TEAM</span><button aria-label={`عضویت در ${department.name}`} onClick={(e) => { e.stopPropagation(); openAuth('signup'); }}><ArrowLeft size={17} /></button></div>
-  </article>;
-}
-
-function MemberMiniCard({ member }) {
-  const department = getDepartment(member.department);
-  return <article className="public-member-card"><div className="member-avatar" style={{ '--dept-color': department.color }}>{initials(member.full_name)}</div><div className="member-mini-data"><strong>{member.full_name}</strong><span>{ROLE_LABELS[member.role] || 'عضو تیم'}</span></div><span className="member-team-dot" style={{ '--dept-color': department.color }} title={department.name} /><div className="member-department-label">{department.name}</div></article>;
-}
-
-function AuthModal({ mode, setMode, close, notify }) {
-  const [form, setForm] = useState({ full_name: '', phone: '', password: '', department: 'Technoplus' });
-  const [busy, setBusy] = useState(false);
-  const [showPassword, setShowPassword] = useState(false);
-  const isSignup = mode === 'signup';
-  const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
-  const submit = async (event) => {
-    event.preventDefault();
-    if (!supabase) return notify('اتصال Supabase تنظیم نشده است. ابتدا مراحل راه‌اندازی README را انجام دهید.', 'error');
-    const phone = normalizePhone(form.phone);
-    if (!/^\+989\d{9}$/.test(phone)) return notify('شماره موبایل را بدون صفر ابتدایی و به شکل 9123456789 وارد کنید.', 'error');
-    if (form.password.length < 8) return notify('رمز عبور باید حداقل ۸ کاراکتر باشد.', 'error');
-    if (isSignup && form.full_name.trim().length < 2) return notify('نام و نام خانوادگی را وارد کنید.', 'error');
-    setBusy(true);
-    try {
-      let result;
-      // The UI still asks for a phone number, but Supabase Auth uses a
-      // deterministic non-deliverable email alias so no SMS provider is needed.
-      const authEmail = phoneToAuthEmail(phone);
-      if (isSignup) {
-        result = await supabase.auth.signUp({
-          email: authEmail,
-          password: form.password,
-          options: { data: { full_name: form.full_name.trim(), department: form.department, phone } },
-        });
-      } else {
-        result = await supabase.auth.signInWithPassword({ email: authEmail, password: form.password });
-      }
-      if (result.error) return notify(explainAuthError(result.error), 'error');
-      if (isSignup && !result.data.session) {
-        notify('حساب ایجاد شد، اما ورود فوری فعال نیست. در Supabase بخش Authentication → Sign In / Providers → Email، گزینه Confirm email را خاموش کن.', 'error');
-        return;
-      }
-      notify(isSignup ? 'عضویت شما در نَوِرا انجام شد؛ خوش آمدید!' : 'با موفقیت وارد شدید.');
-      close();
-    } catch (error) {
-      notify(explainAuthError(error), 'error');
-    } finally {
-      setBusy(false);
-    }
-  };
-  return <div className="modal-scrim" onClick={close}><section className="auth-modal" onClick={(e) => e.stopPropagation()}>
-    <button className="modal-close" onClick={close} aria-label="بستن"><X size={18} /></button><div className="auth-modal-brand"><BrandMark /><span className="auth-vertical-line" /></div>
-    <div className="auth-heading"><span className="section-kicker">{isSignup ? 'BECOME A PART OF NOWERA' : 'WELCOME BACK'}</span><h2>{isSignup ? 'به نَوِرا خوش آمدی.' : 'دوباره خوش آمدی.'}</h2><p>{isSignup ? 'پروفایل خودت را بساز و مسیر همکاری را شروع کن.' : 'با شماره موبایل و رمز عبورت وارد فضای کاری شو.'}</p></div>
-    <form className="auth-form" onSubmit={submit}>
-      {isSignup && <label>نام و نام خانوادگی<input autoComplete="name" required minLength={2} maxLength={100} value={form.full_name} onChange={(e) => update('full_name', e.target.value)} placeholder="مثلاً آرمین رضایی" /></label>}
-      <label>شماره موبایل<div className="phone-field"><span>+98</span><input dir="ltr" inputMode="tel" autoComplete="tel" required value={form.phone} onChange={(e) => update('phone', e.target.value)} placeholder="9123456789" /></div></label>
-      <label>رمز عبور<div className="password-field"><input dir="ltr" type={showPassword ? 'text' : 'password'} autoComplete={isSignup ? 'new-password' : 'current-password'} required minLength={8} value={form.password} onChange={(e) => update('password', e.target.value)} placeholder="حداقل ۸ کاراکتر" /><button type="button" className="password-toggle" onClick={() => setShowPassword((value) => !value)}>{showPassword ? 'پنهان' : 'نمایش'}</button></div></label>
-      {isSignup && <label>بخش موردعلاقه‌ات<select value={form.department} onChange={(e) => update('department', e.target.value)}>{DEPARTMENTS.map((department) => <option value={department.id} key={department.id}>{department.name} · {department.english}</option>)}</select></label>}
-      <button disabled={busy} className="button button-primary auth-submit" type="submit">{busy ? <span className="button-spinner" /> : isSignup ? <UserPlus size={17} /> : <LogIn size={17} />}{busy ? 'در حال پردازش…' : isSignup ? 'ساخت حساب و عضویت' : 'ورود به فضای کاری'}<ArrowLeft size={16} /></button>
-    </form>
-    <div className="auth-switch">{isSignup ? 'قبلاً عضو شده‌ای؟' : 'هنوز حساب کاربری نداری؟'} <button onClick={() => setMode(isSignup ? 'login' : 'signup')}>{isSignup ? 'وارد شو' : 'عضویت در نَوِرا'}</button></div>
-    <div className="auth-security"><ShieldCheck size={15} /><span>دسترسی‌ها به‌صورت نقش‌محور کنترل می‌شوند.</span></div>
-  </section></div>;
-}
-
-function explainAuthError(error) {
-  const message = error?.message || String(error || '');
-  if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|timeout/i.test(message)) {
-    return 'به Supabase وصل نشدیم. آدرس VITE_SUPABASE_URL و کلید Publishable/anon را بررسی کن؛ مطمئن شو پروژه Supabase فعال است و اینترنت/VPN به supabase.co دسترسی دارد. برای بررسی دقیق در ترمینال npm run diagnose را اجرا کن.';
-  }
-  if (/invalid login credentials/i.test(message)) return 'شماره موبایل یا رمز عبور اشتباه است.';
-  if (/email provider is disabled|email logins are disabled|unsupported provider.*email/i.test(message)) return 'در Supabase به Authentication → Sign In / Providers → Email برو و ورود ایمیلی را فعال کن؛ نیازی به فعال‌کردن Phone یا SMS نیست.';
-  if (/password should be at least/i.test(message)) return 'رمز عبور باید حداقل ۸ کاراکتر باشد.';
-  if (/user already registered|already been registered/i.test(message)) return 'این شماره قبلاً ثبت شده است؛ از بخش ورود استفاده کن.';
-  if (/email.*invalid|invalid.*email/i.test(message)) return 'Supabase شناسهٔ داخلی ورود را نپذیرفت. مطمئن شو Email provider فعال و Confirm email خاموش است؛ اگر خطا ادامه داشت متن دقیق خطا را بررسی کن.';
-  if (/signups not allowed/i.test(message)) return 'ثبت‌نام عمومی در تنظیمات Auth غیرفعال است.';
-  if (/rate limit/i.test(message)) return 'تعداد تلاش‌ها زیاد شده است؛ کمی بعد دوباره امتحان کن.';
-  return message || 'ورود یا ثبت‌نام انجام نشد.';
-}
-
-function Toast({ toast, onClose }) {
-  return <div className={`toast toast-${toast.type || 'success'}`} key={toast.key}><span className="toast-icon">{toast.type === 'error' ? <AlertCircle size={18} /> : toast.type === 'info' ? <CircleHelp size={18} /> : <Check size={18} />}</span><span>{toast.message}</span><button aria-label="بستن پیام" onClick={onClose}><X size={15} /></button></div>;
-}
-
-const NAV_ITEMS = [
-  { id: 'overview', label: 'نمای کلی', icon: LayoutDashboard, group: 'workspace' },
-  { id: 'projects', label: 'پروژه‌ها', icon: FolderKanban, group: 'workspace' },
-  { id: 'tasks', label: 'مدیریت تسک‌ها', icon: ClipboardList, group: 'workspace' },
-  { id: 'calendar', label: 'تقویم تیم‌ها', icon: CalendarDays, group: 'workspace' },
-  { id: 'teams', label: 'تیم‌های نَوِرا', icon: Layers3, group: 'organization' },
-  { id: 'reports', label: 'گزارش و بازخورد', icon: MessageSquareWarning, group: 'organization' },
-  { id: 'members', label: 'اعضا و دسترسی‌ها', icon: Users, group: 'management', managersOnly: true },
-  { id: 'settings', label: 'حساب کاربری', icon: Settings2, group: 'management' },
-];
-
-function Sidebar({ activePage, setActivePage, profile, mobileNav, setMobileNav, signOut }) {
-  const [collapsed, setCollapsed] = useState(false);
-  const manager = profile.role !== 'member';
-  const groups = [
-    { id: 'workspace', label: 'فضای کاری' }, { id: 'organization', label: 'سازمان' }, { id: 'management', label: 'مدیریت' },
-  ];
-  return <aside className={`sidebar ${collapsed ? 'sidebar-collapsed' : ''} ${mobileNav ? 'sidebar-mobile-open' : ''}`}>
-    <div className="sidebar-brand"><BrandMark small /><button className="sidebar-collapse" onClick={() => setCollapsed((v) => !v)} title={collapsed ? 'باز کردن منو' : 'جمع کردن منو'}><ChevronLeft size={17} /></button><button className="sidebar-mobile-close" onClick={() => setMobileNav(false)}><X size={18} /></button></div>
-    <div className="workspace-switcher"><div className="workspace-symbol"><Gem size={16} /></div><div className="workspace-switch-copy"><strong>نَوِرا هولدینگ</strong><span>فضای کاری اصلی</span></div><ChevronDown size={15} /></div>
-    <div className="sidebar-nav">{groups.map((group) => <div className="nav-group" key={group.id}><span className="nav-group-label">{group.label}</span>{NAV_ITEMS.filter((item) => item.group === group.id && (!item.managersOnly || manager)).map((item) => { const Icon = item.icon; const isActive = item.id === activePage; const count = item.id === 'projects' ? null : item.id === 'reports' && profile.role === 'super_admin' ? undefined : null; return <button key={item.id} title={collapsed ? item.label : undefined} className={`nav-item ${isActive ? 'nav-item-active' : ''}`} onClick={() => setActivePage(item.id)}><Icon size={18} strokeWidth={isActive ? 2.1 : 1.7} /><span>{item.label}</span>{count !== null && count !== undefined ? <i>{count}</i> : null}{isActive && <span className="nav-active-edge" />}</button>; })}</div>)}</div>
-    <div className="sidebar-bottom"><div className="sidebar-help"><div className="help-icon"><CircleHelp size={17} /></div><div><b>نیاز به راهنمایی داری؟</b><span>از گزارش و بازخورد استفاده کن.</span></div></div><div className="sidebar-profile"><Avatar profile={profile} size="medium" /><div className="sidebar-user"><strong>{profile.full_name}</strong><span>{ROLE_LABELS[profile.role]}</span></div><button title="خروج" onClick={signOut}><LogOut size={16} /></button></div><div className="sidebar-version">NOWERA OS <span>1.0.0</span></div></div>
-  </aside>;
-}
-
-function Topbar({ profile, dataLoading, setMobileNav, onRefresh, activePage }) {
-  const today = faDate(new Date(), { weekday: 'long', day: 'numeric', month: 'long' });
-  return <header className="topbar"><button className="topbar-mobile-menu" onClick={() => setMobileNav(true)} aria-label="باز کردن منو"><Menu size={21} /></button><div className="breadcrumb"><span>فضای کاری</span><ChevronLeft size={14} /><strong>{NAV_ITEMS.find((item) => item.id === activePage)?.label || 'نَوِرا'}</strong><span className="live-status"><i /> آنلاین</span></div><div className="topbar-actions"><span className="topbar-date"><CalendarDays size={15} />{today}</span><button className={`topbar-icon-button ${dataLoading ? 'is-spinning' : ''}`} title="به‌روزرسانی داده‌ها" onClick={onRefresh}><Activity size={18} /></button><div className="topbar-divider" /><div className="topbar-user"><div><strong>{profile.full_name}</strong><span>{getDepartment(profile.department).name}</span></div><Avatar profile={profile} size="small" /></div></div></header>;
-}
-
-function Avatar({ profile, size = 'medium' }) {
-  const department = getDepartment(profile?.department);
-  return <div className={`avatar avatar-${size}`} style={{ '--dept-color': department.color }}>{initials(profile?.full_name)}</div>;
-}
-
-function PageHeader({ eyebrow, title, description, action, badge }) {
-  return <div className="page-heading"><div><div className="page-eyebrow"><span />{eyebrow}</div><h1>{title} {badge && <span className="page-heading-badge">{badge}</span>}</h1><p>{description}</p></div>{action && <div className="page-heading-action">{action}</div>}</div>;
-}
-
-function OverviewPage({ profile, data, setActivePage, openDialog, decideRequest, updateTask, updateProject }) {
-  const manager = profile.role !== 'member';
-  const myProjects = data.projects.filter((project) => isManager(profile, project.department) || data.projectMembers.some((membership) => membership.project_id === project.id && membership.user_id === profile.id && membership.status === 'approved'));
-  const myTasks = data.tasks.filter((task) => isManager(profile, data.projects.find((project) => project.id === task.project_id)?.department) || data.taskMembers.some((membership) => membership.task_id === task.id && membership.user_id === profile.id && membership.status === 'approved'));
-  const myEvents = data.events.filter((event) => event.event_date && new Date(event.event_date) >= new Date(Date.now() - 86400000)).slice(0, 4);
-  const pendingProjects = data.projectMembers.filter((row) => row.status === 'pending' && isManager(profile, data.projects.find((project) => project.id === row.project_id)?.department));
-  const pendingTasks = data.taskMembers.filter((row) => row.status === 'pending' && isManager(profile, data.projects.find((project) => project.id === data.tasks.find((task) => task.id === row.task_id)?.project_id)?.department));
-  const pendingCount = pendingProjects.length + pendingTasks.length;
-  return <div className="page-content overview-page">
-    <PageHeader eyebrow="YOUR WORKSPACE / OVERVIEW" title={`روزت بخیر، ${profile.full_name.split(' ')[0]}`} description="اینجا تصویر کلی از پروژه‌ها، کارهای در جریان و اتفاق‌های پیش روی توست." action={<button className="button button-primary" onClick={() => setActivePage('projects')}><Plus size={16} /> مشاهده پروژه‌ها</button>} />
-    <div className="welcome-banner"><div className="welcome-banner-copy"><span className="welcome-chip"><Sparkles size={13} /> SPACE FOR BIG IDEAS</span><h2>قدرت‌ها کنار هم،<br /><span>نتیجه‌ها فراتر.</span></h2><p>برای جلو رفتن فقط کافی‌ست قدم بعدی مشخص باشد؛ بقیه مسیر را با هم می‌سازیم.</p><button className="welcome-link" onClick={() => setActivePage('teams')}>تیم‌های نَوِرا را بشناس <ArrowLeft size={16} /></button></div><div className="welcome-illustration"><div className="welcome-ring ring-one" /><div className="welcome-ring ring-two" /><div className="welcome-diamond"><img src="/brands/nowera.png" alt="" /></div><span className="welcome-orbit-label orbit-label-a">FOCUS</span><span className="welcome-orbit-label orbit-label-b">CREATE</span><span className="welcome-orbit-label orbit-label-c">GROW</span></div></div>
-    <div className="stats-grid"><StatCard label="پروژه‌های در دسترس" value={myProjects.length} icon={<FolderKanban size={18} />} tone="blue" foot={`${data.projects.filter((p) => p.status === 'active').length} پروژه فعال در نَوِرا`} /><StatCard label="تسک‌های در دست اقدام" value={myTasks.filter((t) => t.status !== 'done').length} icon={<ClipboardList size={18} />} tone="purple" foot={`${myTasks.filter((t) => t.status === 'done').length} تسک تکمیل‌شده`} /><StatCard label="رویدادهای پیش‌رو" value={myEvents.length} icon={<CalendarDays size={18} />} tone="gold" foot="جلسه‌ها و ددلاین‌ها" /><StatCard label={manager ? 'درخواست‌های بررسی‌نشده' : 'اعضای فعال نَوِرا'} value={manager ? pendingCount : data.publicMembers.filter((p) => p.id !== profile.id || p.is_active).length} icon={manager ? <Bell size={18} /> : <Users size={18} />} tone="green" foot={manager ? 'نیازمند بررسی مدیر' : 'اعضای فعال در نَوِرا'} /> </div>
-    <div className="overview-columns"><section className="panel-card projects-panel"><div className="panel-heading"><div><span className="panel-kicker">RECENT ACTIVITY</span><h3>پروژه‌های اخیر</h3></div><button className="subtle-link" onClick={() => setActivePage('projects')}>همه پروژه‌ها <ArrowLeft size={14} /></button></div>
-      {myProjects.length ? <div className="compact-project-list">{myProjects.slice(0, 4).map((project) => <CompactProject key={project.id} project={project} />)}</div> : <EmptyState icon={<FolderKanban size={23} />} title="هنوز پروژه‌ای در فضای تو نیست" description="با بررسی پروژه‌ها، درخواست همکاری خودت را ثبت کن." action={<button className="button button-secondary button-small" onClick={() => setActivePage('projects')}>کشف پروژه‌ها <ArrowLeft size={14} /></button>} />}
-    </section><section className="panel-card agenda-panel"><div className="panel-heading"><div><span className="panel-kicker">UP NEXT</span><h3>تقویم نزدیک</h3></div><button className="panel-icon-button" onClick={() => setActivePage('calendar')}><ArrowLeft size={16} /></button></div>{myEvents.length ? <div className="agenda-list">{myEvents.map((event) => <AgendaRow key={event.id} event={event} />)}</div> : <EmptyState icon={<CalendarDays size={22} />} title="رویدادی ثبت نشده" description="جلسه‌ها و ددلاین‌های تیم در اینجا نمایش داده می‌شوند." />}</section></div>
-    {manager && <section className="panel-card review-panel"><div className="panel-heading"><div><span className="panel-kicker">NEEDS YOUR ATTENTION</span><h3>درخواست‌های همکاری <span className="tiny-count">{toFaDigits(pendingCount)}</span></h3></div><span className="review-note"><Clock3 size={14} /> منتظر تصمیم شما</span></div>{pendingCount ? <div className="review-requests">{pendingProjects.slice(0, 3).map((row) => <RequestRow key={`p-${row.id}`} row={row} kind="project" data={data} decideRequest={decideRequest} />)}{pendingTasks.slice(0, 3).map((row) => <RequestRow key={`t-${row.id}`} row={row} kind="task" data={data} decideRequest={decideRequest} />)}</div> : <div className="review-empty"><CheckCheck size={20} /> درخواست معوقی برای بررسی وجود ندارد.</div>}</section>}
-  </div>;
-}
-
-function StatCard({ label, value, icon, tone, foot }) {
-  return <article className={`stat-card stat-${tone}`}><div className="stat-card-top"><span>{label}</span><span className="stat-icon">{icon}</span></div><div className="stat-value">{toFaDigits(value)}</div><div className="stat-card-foot"><span className="stat-foot-dot" />{foot}</div></article>;
-}
-
-function CompactProject({ project }) {
-  const department = getDepartment(project.department);
-  return <div className="compact-project"><div className="compact-project-avatar" style={{ '--dept-color': department.color }}><Briefcase size={17} /></div><div className="compact-project-main"><strong>{project.title}</strong><span>{department.name} · {project.deadline ? `ددلاین ${faDate(project.deadline)}` : 'بدون ددلاین'}</span></div><StatusPill status={project.status} type="project" /></div>;
-}
-
-function AgendaRow({ event, canEdit = false, deleteEvent }) {
-  const date = new Date(event.event_date);
-  return <div className="agenda-row"><div className="agenda-date"><strong>{toFaDigits(date.getDate())}</strong><span>{new Intl.DateTimeFormat('fa-IR', { month: 'short' }).format(date)}</span></div><div className="agenda-event-copy"><strong>{event.title}</strong><span>{getDepartment(event.department).name} · {new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit' }).format(date)}</span>{event.details && <p>{event.details}</p>}</div>{canEdit && <button className="icon-button danger-icon" title="حذف رویداد" onClick={() => deleteEvent(event.id)}><X size={15} /></button>}</div>;
-}
-
-function ProjectsPage({ profile, data, openDialog, confirmAction, requestProject, decideRequest, updateProject, deleteProject, assignProjectMember, removeProjectMember, searchTerm, setSearchTerm }) {
-  const [departmentFilter, setDepartmentFilter] = useState(profile.role === 'department_admin' ? profile.department : 'all');
-  const visibleProjects = data.projects.filter((project) => (departmentFilter === 'all' || project.department === departmentFilter) && `${project.title} ${project.description}`.toLowerCase().includes(searchTerm.toLowerCase()));
-  const manager = profile.role !== 'member';
-  const pendingRows = data.projectMembers.filter((row) => row.status === 'pending' && isManager(profile, data.projects.find((project) => project.id === row.project_id)?.department));
-  const activeCount = visibleProjects.filter((project) => project.status === 'active').length;
-  const completedCount = visibleProjects.filter((project) => project.status === 'completed').length;
-  return <div className="page-content projects-page">
-    <PageHeader eyebrow="PROJECT HUB / PORTFOLIO" title="پروژه‌های نَوِرا" description="پروژه‌ها را از یک نمای یکپارچه مدیریت کن؛ اعضا، ضرب‌الاجل‌ها و مسیر پیشرفت در دسترس تو هستند." action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'project' })}><Plus size={16} /> پروژه جدید</button>} />
-    <div className={`project-overview-strip ${manager ? 'project-overview-managed' : 'project-overview-member'}`}>
-      <div><span>همه پروژه‌ها</span><strong>{toFaDigits(visibleProjects.length)}</strong></div>
-      <div><span>در حال اجرا</span><strong>{toFaDigits(activeCount)}</strong></div>
-      <div><span>تکمیل‌شده</span><strong>{toFaDigits(completedCount)}</strong></div>
-      {manager && <div className="project-overview-note"><ShieldCheck size={17} /><span>مدیریت پروژه‌های {profile.role === 'super_admin' ? 'تمام بخش‌ها' : getDepartment(profile.department).name}</span></div>}
-    </div>
-    <div className="filter-toolbar projects-filter-toolbar">
-      <div className="search-field"><Search size={17} /><input placeholder="جست‌وجوی نام یا شرح پروژه…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} aria-label="جست‌وجوی پروژه" /></div>
-      <div className="department-filter"><span>بخش</span><select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)}>{profile.role !== 'department_admin' && <option value="all">همه تیم‌ها</option>}{DEPARTMENTS.filter((d) => profile.role !== 'department_admin' || d.id === profile.department).map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></div>
-    </div>
-    {visibleProjects.length ? <div className="projects-grid">{visibleProjects.map((project) => <ProjectCard key={project.id} project={project} profile={profile} data={data} openDialog={openDialog} confirmAction={confirmAction} requestProject={requestProject} updateProject={updateProject} deleteProject={deleteProject} assignProjectMember={assignProjectMember} removeProjectMember={removeProjectMember} />)}</div> : <EmptyState icon={<FolderKanban size={25} />} title="پروژه‌ای پیدا نشد" description={manager ? 'با ساخت اولین پروژه، مسیر همکاری اعضا را شروع کنید.' : 'پروژه جدیدی مطابق این فیلتر وجود ندارد. بعداً دوباره بررسی کن.'} action={manager && <button className="button button-primary button-small" onClick={() => openDialog({ type: 'project' })}><Plus size={15} /> ساخت پروژه</button>} />}
-    {manager && <section className="panel-card approvals-panel"><div className="panel-heading"><div><span className="panel-kicker">JOIN REQUESTS</span><h3>درخواست‌های عضویت پروژه</h3></div><span className="tiny-count">{toFaDigits(pendingRows.length)}</span></div>{pendingRows.length ? <div className="review-requests">{pendingRows.map((row) => <RequestRow key={row.id} row={row} kind="project" data={data} decideRequest={decideRequest} />)}</div> : <p className="muted-empty-text">در حال حاضر درخواست جدیدی وجود ندارد.</p>}</section>}
-  </div>;
-}
-
-function ProjectCard({ project, profile, data, openDialog, confirmAction, requestProject, updateProject, deleteProject, assignProjectMember, removeProjectMember }) {
-  const [teamExpanded, setTeamExpanded] = useState(false);
-  const [memberToAdd, setMemberToAdd] = useState('');
-  const department = getDepartment(project.department);
-  const manager = isManager(profile, project.department);
-  const membership = data.projectMembers.find((row) => row.project_id === project.id && row.user_id === profile.id);
-  const approvedMemberships = data.projectMembers.filter((row) => row.project_id === project.id && row.status === 'approved');
-  const pendingMemberships = data.projectMembers.filter((row) => row.project_id === project.id && row.status === 'pending');
-  const count = approvedMemberships.length;
-  const taskCount = data.tasks.filter((task) => task.project_id === project.id).length;
-  const eligible = data.profiles.filter((member) => member.is_active && member.role === 'member' && !approvedMemberships.some((row) => row.user_id === member.id));
-  const askDelete = () => confirmAction({
-    title: 'حذف کامل پروژه؟',
-    description: `پروژه «${project.title}» به‌همراه تمام تسک‌ها، درخواست‌ها و عضویت‌های وابسته برای همیشه حذف می‌شود. این عملیات قابل بازگشت نیست.`,
-    confirmLabel: 'حذف پروژه',
-    onConfirm: () => deleteProject(project.id),
-  });
-  return <article className="project-card" style={{ '--dept-color': department.color, '--dept-glow': department.glow }}>
-    <div className="project-card-glow" />
-    <div className="project-card-top"><div className="project-department-chip"><span />{department.name}</div><StatusPill status={project.status} type="project" /></div>
-    <div className="project-card-icon"><img src={department.logo} alt={`${department.english} logo`} /></div>
-    <h3>{project.title}</h3>
-    <p className="project-card-desc">{project.description || 'برای این پروژه هنوز توضیحی ثبت نشده است.'}</p>
-    <div className="project-card-meta"><span><Users size={14} />{toFaDigits(count)} همکار</span><span><ClipboardList size={14} />{toFaDigits(taskCount)} تسک</span>{project.deadline && <span><CalendarDays size={14} />{faDate(project.deadline)}</span>}</div>
-    <div className="project-card-bottom">
-      {manager ? <div className="project-manager-actions">
-        <select value={project.status} onChange={(e) => updateProject(project.id, { status: e.target.value })} aria-label="وضعیت پروژه"><option value="planning">برنامه‌ریزی</option><option value="active">در حال اجرا</option><option value="paused">متوقف</option><option value="completed">تکمیل‌شده</option></select>
-        <button className="icon-button project-action-button" title="ویرایش پروژه" aria-label="ویرایش پروژه" onClick={() => openDialog({ type: 'editProject', record: project })}><Pencil size={15} /></button>
-        <button className="icon-button danger-icon project-action-button" title="حذف پروژه" aria-label="حذف پروژه" onClick={askDelete}><Trash2 size={15} /></button>
-      </div> : <span className={`membership-state membership-${membership?.status || 'none'}`}>{membership ? REQUEST_STATUS[membership.status] : 'به همکار نیاز داریم'}</span>}
-      {!manager && <button disabled={membership?.status === 'pending' || membership?.status === 'approved'} className={`button ${membership?.status === 'approved' ? 'button-secondary' : 'button-outline'} button-small`} onClick={() => requestProject(project.id)}>{membership?.status === 'pending' ? 'در انتظار' : membership?.status === 'approved' ? 'عضو پروژه' : membership?.status === 'rejected' ? 'ارسال دوباره' : 'درخواست همکاری'}<ArrowLeft size={14} /></button>}
-      {manager && <button className="project-team-toggle" onClick={() => setTeamExpanded((value) => !value)} aria-expanded={teamExpanded}><Users size={14} /> مدیریت اعضا <span>{toFaDigits(count + pendingMemberships.length)}</span><ChevronDown size={14} /></button>}
-    </div>
-    {manager && teamExpanded && <div className="project-team-manager">
-      <div className="project-team-manager-head"><strong>اعضای پروژه</strong><span>{toFaDigits(count)} عضو تأییدشده</span></div>
-      {approvedMemberships.length ? <div className="project-team-member-list">{approvedMemberships.map((row) => {
-        const member = data.profiles.find((person) => person.id === row.user_id);
-        return <div className="project-team-member" key={row.id}><Avatar profile={member || { full_name: 'عضو', department: project.department }} size="tiny" /><span>{member?.full_name || 'عضو پروژه'}</span><button title="حذف از پروژه" aria-label="حذف عضو از پروژه" onClick={() => confirmAction({ title: 'حذف عضو از پروژه؟', description: `عضویت این فرد در «${project.title}» و تخصیص‌های تسک او نیز لغو می‌شود.`, confirmLabel: 'حذف عضویت', onConfirm: () => removeProjectMember(project.id, row.user_id) })}><UserMinus size={14} /></button></div>;
-      })}</div> : <p className="muted-empty-text">هنوز عضوی به این پروژه اضافه نشده است.</p>}
-      <div className="project-assign-row"><select value={memberToAdd} onChange={(e) => setMemberToAdd(e.target.value)} aria-label="انتخاب عضو برای افزودن به پروژه"><option value="">افزودن عضو فعال…</option>{eligible.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {getDepartment(member.department).name}</option>)}</select><button className="button button-primary button-small" disabled={!memberToAdd} onClick={async () => { const ok = await assignProjectMember(project.id, memberToAdd); if (ok) setMemberToAdd(''); }}><UserPlus size={14} /> افزودن</button></div>
-      {pendingMemberships.length > 0 && <p className="project-pending-note">{toFaDigits(pendingMemberships.length)} درخواست در انتظار بررسی در پایین صفحه نمایش داده می‌شود.</p>}
-    </div>}
-  </article>;
-}
-
-function TasksPage({ profile, data, openDialog, confirmAction, requestTask, decideRequest, updateTask, deleteTask, assignTaskMember, removeTaskMember }) {
-  const [filter, setFilter] = useState('all');
-  const [projectFilter, setProjectFilter] = useState('all');
-  const [query, setQuery] = useState('');
-  const projectMap = useMemo(() => Object.fromEntries(data.projects.map((p) => [p.id, p])), [data.projects]);
-  const visibleTasks = data.tasks.filter((task) => (filter === 'all' || task.status === filter) && (projectFilter === 'all' || task.project_id === projectFilter) && `${task.title} ${task.description} ${projectMap[task.project_id]?.title || ''}`.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
-  const manager = profile.role !== 'member';
-  const pendingRows = data.taskMembers.filter((row) => row.status === 'pending' && isManager(profile, projectMap[data.tasks.find((task) => task.id === row.task_id)?.project_id]?.department));
-  return <div className="page-content tasks-page"><PageHeader eyebrow="TASK CONTROL / EXECUTION" title="مدیریت تسک‌ها" description="مسئولیت‌ها را شفاف کن، پیشرفت را ببین و اجرای پروژه‌ها را از یک فهرست منظم دنبال کن." action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'task' })}><Plus size={16} /> تعریف تسک</button>} />
-    <div className="task-intro-strip"><div className="task-intro-icon"><Zap size={19} /></div><div><strong>اجرای چندنفره و مدیریت مستقیم اعضا</strong><p>مدیران می‌توانند اعضا را مستقیماً تخصیص دهند یا از تسک خارج کنند؛ تغییر وضعیت برای اعضای تأییدشده نیز فعال است.</p></div></div>
-    <div className="task-toolbar-v2"><div className="search-field"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="جست‌وجوی تسک یا پروژه…" aria-label="جست‌وجوی تسک" /></div><select value={projectFilter} onChange={(e) => setProjectFilter(e.target.value)} aria-label="فیلتر پروژه"><option value="all">تمام پروژه‌ها</option>{data.projects.map((project) => <option value={project.id} key={project.id}>{project.title}</option>)}</select></div>
-    <div className="task-filter-tabs">{[{ id: 'all', label: 'همه تسک‌ها' }, { id: 'todo', label: 'شروع‌نشده' }, { id: 'in_progress', label: 'در حال انجام' }, { id: 'review', label: 'در انتظار بررسی' }, { id: 'done', label: 'تکمیل‌شده' }].map((item) => <button key={item.id} className={filter === item.id ? 'task-filter-active' : ''} onClick={() => setFilter(item.id)}>{item.label}<span>{toFaDigits(item.id === 'all' ? data.tasks.length : data.tasks.filter((t) => t.status === item.id).length)}</span></button>)}</div>
-    {visibleTasks.length ? <div className="tasks-list">{visibleTasks.map((task) => <TaskRow key={task.id} task={task} project={projectMap[task.project_id]} profile={profile} data={data} openDialog={openDialog} confirmAction={confirmAction} requestTask={requestTask} updateTask={updateTask} deleteTask={deleteTask} assignTaskMember={assignTaskMember} removeTaskMember={removeTaskMember} />)}</div> : <EmptyState icon={<ClipboardList size={24} />} title="تسکی در این فهرست نیست" description={manager ? 'فیلترها را تغییر بده یا از تعریف تسک، کارهای پروژه را به قدم‌های کوچک‌تر تبدیل کن.' : 'برای مشاهده تسک‌ها ابتدا باید عضو تأییدشده یک پروژه باشی. از بخش پروژه‌ها درخواست همکاری بفرست.'} />}
-    {manager && <section className="panel-card approvals-panel"><div className="panel-heading"><div><span className="panel-kicker">TASK ASSIGNMENTS</span><h3>درخواست‌های دریافت تسک</h3></div><span className="tiny-count">{toFaDigits(pendingRows.length)}</span></div>{pendingRows.length ? <div className="review-requests">{pendingRows.map((row) => <RequestRow key={row.id} row={row} kind="task" data={data} decideRequest={decideRequest} />)}</div> : <p className="muted-empty-text">درخواست معوقی برای بررسی وجود ندارد.</p>}</section>}
-  </div>;
-}
-
-function TaskRow({ task, project, profile, data, openDialog, confirmAction, requestTask, updateTask, deleteTask, assignTaskMember, removeTaskMember }) {
-  const [teamExpanded, setTeamExpanded] = useState(false);
-  const [memberToAdd, setMemberToAdd] = useState('');
-  if (!project) return null;
-  const department = getDepartment(project.department);
-  const manager = isManager(profile, project.department);
-  const taskMembership = data.taskMembers.find((row) => row.task_id === task.id && row.user_id === profile.id);
-  const projectMembership = data.projectMembers.find((row) => row.project_id === project.id && row.user_id === profile.id);
-  const canRequest = projectMembership?.status === 'approved';
-  const approvedMemberships = data.taskMembers.filter((row) => row.task_id === task.id && row.status === 'approved');
-  const membersCount = approvedMemberships.length;
-  const eligible = data.projectMembers.filter((row) => row.project_id === project.id && row.status === 'approved' && !approvedMemberships.some((approved) => approved.user_id === row.user_id)).map((row) => data.profiles.find((person) => person.id === row.user_id)).filter((member) => member?.is_active && member.role === 'member');
-  const askDelete = () => confirmAction({ title: 'حذف تسک؟', description: `تسک «${task.title}» و تمام درخواست‌ها و عضویت‌های مرتبط با آن برای همیشه حذف می‌شوند.`, confirmLabel: 'حذف تسک', onConfirm: () => deleteTask(task.id) });
-  return <article className="task-row"><div className={`task-priority-line priority-${task.priority}`} /><div className="task-checkbox-visual" data-done={task.status === 'done'}>{task.status === 'done' ? <Check size={16} /> : <CircleDot size={16} />}</div><div className="task-main"><div className="task-row-title"><h3>{task.title}</h3><StatusPill status={task.status} type="task" /></div><div className="task-row-meta"><span className="task-project-name" style={{ '--dept-color': department.color }}>{project.title}</span><span className="meta-separator" /><span><Flag size={13} /> اولویت {PRIORITY[task.priority]}</span>{task.due_date && <><span className="meta-separator" /><span><CalendarDays size={13} />{faDate(task.due_date)}</span></>}</div>{task.description && <p className="task-row-desc">{task.description}</p>}
-    {manager && teamExpanded && <div className="task-team-manager"><div className="task-team-member-list">{approvedMemberships.length ? approvedMemberships.map((row) => { const member = data.profiles.find((person) => person.id === row.user_id); return <div className="project-team-member" key={row.id}><Avatar profile={member || { full_name: 'عضو', department: project.department }} size="tiny" /><span>{member?.full_name || 'عضو تسک'}</span><button title="حذف از تسک" aria-label="حذف عضو از تسک" onClick={() => confirmAction({ title: 'حذف عضو از تسک؟', description: `دسترسی این فرد به تسک «${task.title}» لغو می‌شود.`, confirmLabel: 'حذف تخصیص', onConfirm: () => removeTaskMember(task.id, row.user_id) })}><UserMinus size={14} /></button></div>; }) : <span className="muted-empty-text">هنوز عضوی تخصیص داده نشده است.</span>}</div><div className="project-assign-row"><select value={memberToAdd} onChange={(e) => setMemberToAdd(e.target.value)} aria-label="انتخاب عضو برای تخصیص تسک"><option value="">انتخاب عضو پروژه…</option>{eligible.map((member) => <option key={member.id} value={member.id}>{member.full_name}</option>)}</select><button className="button button-primary button-small" disabled={!memberToAdd} onClick={async () => { const ok = await assignTaskMember(task.id, memberToAdd); if (ok) setMemberToAdd(''); }}><UserPlus size={14} /> تخصیص</button></div></div>}
-  </div><div className="task-row-end"><span className="task-assignees"><Users size={14} />{toFaDigits(membersCount)} نفر</span>{manager || taskMembership?.status === 'approved' ? <select className="task-status-select" value={task.status} onChange={(e) => updateTask(task.id, { status: e.target.value })} aria-label="وضعیت تسک"><option value="todo">شروع‌نشده</option><option value="in_progress">در حال انجام</option><option value="review">بررسی</option><option value="done">تکمیل‌شده</option></select> : <button disabled={!canRequest || taskMembership?.status === 'pending' || taskMembership?.status === 'approved'} className="button button-outline button-small" onClick={() => requestTask(task.id)}>{!canRequest ? 'ابتدا عضویت پروژه' : taskMembership?.status === 'pending' ? 'در انتظار' : taskMembership?.status === 'approved' ? 'عضو تسک' : taskMembership?.status === 'rejected' ? 'درخواست مجدد' : 'درخواست تسک'}</button>}
-    {manager && <div className="task-manager-actions"><button className="icon-button" title="ویرایش تسک" aria-label="ویرایش تسک" onClick={() => openDialog({ type: 'editTask', record: task })}><Pencil size={15} /></button><button className="icon-button danger-icon" title="حذف تسک" aria-label="حذف تسک" onClick={askDelete}><Trash2 size={15} /></button><button className="task-team-toggle" onClick={() => setTeamExpanded((value) => !value)} aria-expanded={teamExpanded}><Users size={14} /> اعضا <ChevronDown size={13} /></button></div>}
-  </div></article>;
-}
-
-function CalendarPage({ profile, data, openDialog, deleteEvent, confirmAction }) {
-  const [department, setDepartment] = useState(profile.role === 'department_admin' ? profile.department : 'all');
-  const [month, setMonth] = useState(() => getPersianMonthStart(new Date()));
-  const [selectedDate, setSelectedDate] = useState(() => dateKey(new Date()));
-  const events = data.events.filter((event) => department === 'all' || event.department === department).sort((a, b) => new Date(a.event_date) - new Date(b.event_date));
-  const manager = profile.role !== 'member';
-  const persianMonthKey = (date) => new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: 'numeric' }).format(date);
-  const persianDay = (date) => new Intl.DateTimeFormat('fa-IR-u-ca-persian', { day: 'numeric' }).format(date);
-  const activeMonthKey = persianMonthKey(month);
-  const monthName = new Intl.DateTimeFormat('fa-IR-u-ca-persian', { month: 'long', year: 'numeric' }).format(month);
-  const cells = useMemo(() => {
-    const first = getPersianMonthStart(month);
-    const offset = (first.getDay() + 1) % 7;
-    const start = new Date(first); start.setDate(first.getDate() - offset);
-    return Array.from({ length: 42 }, (_, index) => {
-      const date = new Date(start); date.setDate(start.getDate() + index);
-      return { date, key: dateKey(date), inMonth: persianMonthKey(date) === activeMonthKey, day: persianDay(date) };
-    });
-  }, [month, activeMonthKey]);
-  const selectedEvents = events.filter((event) => dateKey(new Date(event.event_date)) === selectedDate);
-  const changeMonth = (offset) => {
-    const target = getPersianMonthStart(month);
-    target.setDate(target.getDate() + (offset > 0 ? 35 : -1));
-    const next = getPersianMonthStart(target);
-    setMonth(next); setSelectedDate(dateKey(next));
-  };
-  const selectedLabel = (() => {
-    const date = new Date(`${selectedDate}T12:00:00`);
-    return new Intl.DateTimeFormat('fa-IR-u-ca-persian', { weekday: 'long', day: 'numeric', month: 'long' }).format(date);
-  })();
-  return <div className="page-content calendar-page-v2"><PageHeader eyebrow="TEAM CALENDAR / SCHEDULE" title="تقویم نَوِرا" description="برنامه‌ی تیم‌ها را در نمای ماهانه ببین و جزئیات هر روز را در کنار تقویم دنبال کن." action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'event' })}><CalendarPlus size={16} /> ثبت رویداد</button>} />
-    <div className="calendar-v2-toolbar"><div className="calendar-v2-context"><span className="calendar-v2-context-icon"><CalendarDays size={19} /></span><div><span>برنامه‌ریزی ماهانه</span><strong>{monthName}</strong></div></div><div className="calendar-v2-filters"><select value={department} onChange={(e) => setDepartment(e.target.value)} aria-label="فیلتر تیم">{profile.role !== 'department_admin' && <option value="all">همه تیم‌ها</option>}{DEPARTMENTS.filter((d) => profile.role !== 'department_admin' || d.id === profile.department).map((d) => <option value={d.id} key={d.id}>{d.name}</option>)}</select><div className="calendar-month-nav"><button className="icon-button" onClick={() => changeMonth(-1)} title="ماه قبل" aria-label="ماه قبل"><ChevronRight size={17} /></button><button className="button button-secondary button-small" onClick={() => { const now = new Date(); setMonth(getPersianMonthStart(now)); setSelectedDate(dateKey(now)); }}>امروز</button><button className="icon-button" onClick={() => changeMonth(1)} title="ماه بعد" aria-label="ماه بعد"><ChevronLeft size={17} /></button></div></div></div>
-    <div className="calendar-v2-layout"><section className="calendar-month-card"><div className="calendar-weekdays">{['شنبه', 'یکشنبه', 'دوشنبه', 'سه‌شنبه', 'چهارشنبه', 'پنجشنبه', 'جمعه'].map((day) => <span key={day}>{day}</span>)}</div><div className="calendar-month-grid">{cells.map(({ date, key, inMonth, day }) => {
-      const dayEvents = events.filter((event) => dateKey(new Date(event.event_date)) === key);
-      const selected = key === selectedDate;
-      const today = key === dateKey(new Date());
-      return <button key={key} className={`calendar-day-cell ${inMonth ? '' : 'calendar-day-muted'} ${selected ? 'calendar-day-selected' : ''} ${today ? 'calendar-day-today' : ''}`} onClick={() => { setSelectedDate(key); if (!inMonth) setMonth(getPersianMonthStart(date)); }} aria-pressed={selected}><span className="calendar-day-number">{day}</span>{dayEvents.length > 0 && <span className="calendar-day-events"><i />{toFaDigits(dayEvents.length)} رویداد</span>}{dayEvents.length > 0 && <span className="calendar-day-dots">{dayEvents.slice(0, 3).map((event) => <i key={event.id} style={{ '--dept-color': getDepartment(event.department).color }} />)}</span>}</button>;
-    })}</div><div className="calendar-month-foot"><span><i className="calendar-legend-dot" /> روز دارای رویداد</span><span>{toFaDigits(events.length)} رویداد در فهرست فیلترشده</span></div></section>
-      <aside className="calendar-selected-agenda"><div className="calendar-selected-head"><span className="section-kicker">DAY AGENDA</span><h2>{selectedLabel}</h2><p>{toFaDigits(selectedEvents.length)} رویداد برای این روز ثبت شده است.</p></div>{selectedEvents.length ? <div className="calendar-selected-list">{selectedEvents.map((event) => <article className="calendar-selected-event" key={event.id}><div className="calendar-selected-event-time">{new Intl.DateTimeFormat('fa-IR', { hour: '2-digit', minute: '2-digit' }).format(new Date(event.event_date))}</div><div className="calendar-selected-event-body"><span className="department-inline" style={{ '--dept-color': getDepartment(event.department).color }}><i />{getDepartment(event.department).name}</span><h3>{event.title}</h3>{event.details && <p>{event.details}</p>}</div>{manager && isManager(profile, event.department) && <button className="icon-button danger-icon" title="حذف رویداد" onClick={() => confirmAction({ title: 'حذف رویداد؟', description: `رویداد «${event.title}» از تقویم حذف می‌شود.`, confirmLabel: 'حذف رویداد', onConfirm: () => deleteEvent(event.id) })}><Trash2 size={14} /></button>}</article>)}</div> : <EmptyState icon={<CalendarDays size={23} />} title="روز خلوتی است" description={manager ? 'برای این روز رویدادی ثبت نشده؛ جلسه یا ددلاین جدیدی اضافه کن.' : 'برای این روز رویدادی ثبت نشده است.'} action={manager && <button className="button button-secondary button-small" onClick={() => openDialog({ type: 'event' })}><Plus size={14} /> ثبت رویداد</button>} />}</aside>
-    </div>
-  </div>;
-}
-
-function getPersianMonthStart(value) {
-  const date = new Date(value);
-  date.setHours(12, 0, 0, 0);
-  const formatter = new Intl.DateTimeFormat('fa-IR-u-ca-persian', { year: 'numeric', month: 'numeric' });
-  const key = formatter.format(date);
-  while (true) {
-    const previous = new Date(date);
-    previous.setDate(previous.getDate() - 1);
-    if (formatter.format(previous) !== key) break;
-    date.setDate(date.getDate() - 1);
-  }
-  return date;
-}
-
-function dateKey(date) {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, '0');
-  const day = String(date.getDate()).padStart(2, '0');
-  return `${year}-${month}-${day}`;
-}
-
-function TeamsPage({ profile, data, setActivePage }) {
-  return <div className="page-content"><PageHeader eyebrow="ORGANIZATION / DIVISIONS" title="تیم‌های نَوِرا" description="چهار بخش تخصصی با هویت مستقل که برای یک چشم‌انداز مشترک هم‌افزایی می‌کنند." />
-    <div className="team-directory-grid">{DEPARTMENTS.map((department, index) => { const members = data.publicMembers.filter((p) => p.department === department.id); const projects = data.projects.filter((p) => p.department === department.id); const manager = profile.role === 'super_admin' || (profile.role === 'department_admin' && profile.department === department.id); return <article className="team-directory-card" key={department.id} style={{ '--dept-color': department.color, '--dept-glow': department.glow }}><div className="team-directory-head"><span>DIVISION 0{index + 1}</span>{profile.department === department.id && <span className="your-team-chip">تیم شما</span>}</div><div className="team-directory-logo"><img src={department.logo} alt={`${department.english} logo`} /></div><h2>{department.name}</h2><span className="team-directory-english">{department.english}</span><p>{department.tagline}</p><div className="team-directory-metrics"><div><strong>{toFaDigits(members.length)}</strong><span>عضو فعال</span></div><div><strong>{toFaDigits(projects.length)}</strong><span>پروژه</span></div><div><strong>{toFaDigits(projects.filter((p) => p.status === 'completed').length)}</strong><span>تکمیل‌شده</span></div></div><div className="team-directory-footer"><div className="avatar-stack">{members.slice(0, 4).map((member) => <Avatar profile={member} size="tiny" key={member.id} />)}{members.length > 4 && <span>+{toFaDigits(members.length - 4)}</span>}</div><button className="button button-secondary button-small" onClick={() => setActivePage('projects')}>پروژه‌های تیم <ArrowLeft size={14} /></button></div>{manager && <div className="team-manager-flag"><ShieldCheck size={13} /> دسترسی مدیریت این بخش</div>}</article>; })}</div>
-    <section className="team-principles"><div><span className="section-kicker">ONE ORGANIZATION</span><h3>تخصص‌های متفاوت، استانداردهای مشترک.</h3><p>فرآیندها، تقویم‌ها و مسئولیت‌ها شفاف‌اند تا هر تیم با تمرکز خودش کار کند و نتیجه در سطح نَوِرا دیده شود.</p></div><div className="principle-points"><span><Check size={15} /> مسئولیت‌پذیری شفاف</span><span><Check size={15} /> همکاری بین‌تیمی</span><span><Check size={15} /> گزارش‌پذیری و پیگیری</span></div></section>
-  </div>;
-}
-
-function ReportsPage({ profile, data, openDialog, updateReport }) {
-  const canReview = profile.role === 'super_admin';
-  const reports = data.reports;
-  return <div className="page-content"><PageHeader eyebrow="TRUST / FEEDBACK CHANNEL" title="گزارش و بازخورد" description="اگر درباره روند کار یا عملکرد مدیریتی مسئله‌ای وجود دارد، گزارش را محرمانه و مستقیم ثبت کن." action={<button className="button button-primary" onClick={() => openDialog({ type: 'report' })}><Send size={16} /> ثبت گزارش</button>} />
-    <div className="report-privacy-banner"><div className="privacy-lock"><ShieldCheck size={24} /></div><div><strong>حریم خصوصی گزارش‌دهنده</strong><p>گزارش‌ها فقط برای ثبت‌کننده و مدیر اصلی قابل مشاهده‌اند؛ مدیر بخش به گزارش ثبت‌شده درباره خودش دسترسی ندارد.</p></div><span className="privacy-tag"><span /> CONFIDENTIAL</span></div>
-    {reports.length ? <div className="reports-list">{reports.map((report) => <article className="report-card" key={report.id}><div className="report-card-icon"><MessageSquareWarning size={19} /></div><div className="report-card-main"><div className="report-card-top"><span className="report-department">{getDepartment(report.department).name}</span><span className="report-date">{faDate(report.created_at)}</span></div><h3>{report.title}</h3><p>{report.message}</p><div className="report-card-bottom"><StatusPill status={report.status} type="report" />{canReview && <select value={report.status} onChange={(e) => updateReport(report.id, e.target.value)} aria-label="وضعیت گزارش"><option value="new">جدید</option><option value="reviewing">در حال بررسی</option><option value="resolved">رسیدگی‌شده</option></select>}</div></div></article>)}</div> : <EmptyState icon={<MessageSquareWarning size={25} />} title={canReview ? 'گزارشی ثبت نشده است' : 'هنوز گزارشی ثبت نکرده‌ای'} description={canReview ? 'در صورت ثبت گزارش توسط اعضا، موارد محرمانه در این بخش نمایش داده می‌شوند.' : 'این کانال برای مطرح کردن دغدغه‌ها و بازخوردهای مهم در نظر گرفته شده است.'} action={<button className="button button-secondary button-small" onClick={() => openDialog({ type: 'report' })}><Plus size={15} /> ثبت گزارش محرمانه</button>} />}
-  </div>;
-}
-
-function MembersPage({ profile, data, assignAdmin, revokeAdmin, deactivateMember, searchTerm, setSearchTerm }) {
-  const [departmentFilter, setDepartmentFilter] = useState(profile.role === 'department_admin' ? profile.department : 'all');
-  const [selectedUser, setSelectedUser] = useState('');
-  const [adminDepartment, setAdminDepartment] = useState('Technoplus');
-  const [memberToDeactivate, setMemberToDeactivate] = useState(null);
-  const [deactivating, setDeactivating] = useState(false);
-  const superAdmin = profile.role === 'super_admin';
-  const activeProfiles = data.profiles.filter((member) => member.is_active);
-  const members = activeProfiles.filter((member) => {
-    const matchesDepartment = departmentFilter === 'all' || member.department === departmentFilter;
-    const searchable = `${member.full_name} ${member.department} ${getDepartment(member.department).name}`.toLocaleLowerCase();
-    return matchesDepartment && searchable.includes(searchTerm.toLocaleLowerCase());
-  });
-  const eligible = activeProfiles.filter((member) => member.role === 'member');
-  const adminsCount = activeProfiles.filter((member) => member.role !== 'member').length;
-  const departmentsWithMembers = DEPARTMENTS.filter((department) => activeProfiles.some((member) => member.department === department.id)).length;
-  const displayedMembers = members.filter((member) => superAdmin || member.role === 'member' || member.id === profile.id);
-
-  const confirmDeactivate = async () => {
-    if (!memberToDeactivate || deactivating) return;
-    setDeactivating(true);
-    try {
-      const success = await deactivateMember(memberToDeactivate.id);
-      if (success) setMemberToDeactivate(null);
-    } finally {
-      setDeactivating(false);
-    }
-  };
-
-  return <div className="page-content members-page">
-    <PageHeader
-      eyebrow="PEOPLE / ACCESS CONTROL"
-      title="اعضا و دسترسی‌ها"
-      description={superAdmin ? 'ترکیب تیم‌ها، سطح دسترسی و عضویت افراد را از یک فضای یکپارچه مدیریت کنید.' : `اعضای فعال ${getDepartment(profile.department).name} و دسترسی‌های مربوط به بخش شما.`}
-      badge={`${toFaDigits(activeProfiles.length)} عضو فعال`}
-    />
-
-    <section className="members-summary-grid" aria-label="خلاصه وضعیت اعضا">
-      <article className="members-summary-card members-summary-primary">
-        <div className="members-summary-copy"><span>ACTIVE MEMBERS</span><strong>{toFaDigits(activeProfiles.length)}</strong><small>اعضای دارای دسترسی فعال</small></div>
-        <div className="members-summary-icon"><Users size={21} /></div>
-      </article>
-      <article className="members-summary-card">
-        <div className="members-summary-copy"><span>ADMIN ACCESS</span><strong>{toFaDigits(adminsCount)}</strong><small>مدیر اصلی و مدیران بخش</small></div>
-        <div className="members-summary-icon members-summary-violet"><ShieldCheck size={21} /></div>
-      </article>
-      <article className="members-summary-card">
-        <div className="members-summary-copy"><span>DIVISIONS</span><strong>{toFaDigits(departmentsWithMembers)}</strong><small>تیم دارای عضو فعال</small></div>
-        <div className="members-summary-icon members-summary-blue"><Layers3 size={21} /></div>
-      </article>
-    </section>
-
-    {superAdmin && <section className="admin-assignment-card">
-      <div className="admin-assignment-icon"><Crown size={23} /></div>
-      <div className="admin-assignment-copy"><span className="panel-kicker">SUPER ADMIN CONTROL</span><h3>واگذاری دسترسی مدیریتی</h3><p>یک عضو فعال را انتخاب کنید و مسئولیت یکی از بخش‌ها را به او بسپارید.</p></div>
-      <div className="admin-assignment-controls">
-        <select value={selectedUser} onChange={(e) => setSelectedUser(e.target.value)} aria-label="انتخاب عضو برای مدیریت">
-          <option value="">انتخاب عضو…</option>
-          {eligible.map((member) => <option key={member.id} value={member.id}>{member.full_name} · {getDepartment(member.department).name}</option>)}
-        </select>
-        <select value={adminDepartment} onChange={(e) => setAdminDepartment(e.target.value)} aria-label="انتخاب بخش مدیریتی">
-          {DEPARTMENTS.map((department) => <option value={department.id} key={department.id}>{department.name}</option>)}
-        </select>
-        <button className="button button-primary button-small" disabled={!selectedUser} onClick={async () => { const ok = await assignAdmin(selectedUser, adminDepartment); if (ok) setSelectedUser(''); }}>اعطای دسترسی <ShieldCheck size={15} /></button>
-      </div>
-    </section>}
-
-    <section className="members-directory-section">
-      <div className="members-directory-heading">
-        <div><span className="section-kicker">TEAM DIRECTORY</span><h2>فهرست اعضا</h2><p>وضعیت عضویت و سطح دسترسی هر فرد را مرور کنید.</p></div>
-        <span className="members-directory-count">{toFaDigits(displayedMembers.length)} نتیجه</span>
-      </div>
-      <div className="filter-toolbar members-toolbar">
-        <div className="search-field"><Search size={18} /><input placeholder="جست‌وجوی نام یا تیم…" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} aria-label="جست‌وجوی اعضا" /><kbd>⌕</kbd></div>
-        <div className="department-filter"><span>فیلتر تیم</span><select value={departmentFilter} onChange={(e) => setDepartmentFilter(e.target.value)} aria-label="فیلتر بر اساس تیم">
-          {superAdmin && <option value="all">همه تیم‌ها</option>}
-          {DEPARTMENTS.filter((department) => profile.role !== 'department_admin' || department.id === profile.department).map((department) => <option key={department.id} value={department.id}>{department.name}</option>)}
-        </select></div>
-      </div>
-
-      <div className="members-table-card">
-        <div className="members-table-header"><span>عضو</span><span>بخش تخصصی</span><span>سطح دسترسی</span><span>تاریخ عضویت</span><span>عملیات</span></div>
-        {displayedMembers.length ? displayedMembers.map((member) => {
-          const department = getDepartment(member.department);
-          const canDeactivate = member.id !== profile.id && member.role !== 'super_admin' && (superAdmin || (profile.role === 'department_admin' && member.role === 'member' && profile.department === member.department));
-          return <div className="member-table-row" key={member.id}>
-            <div className="member-cell-primary"><Avatar profile={member} size="medium" /><div><strong>{member.full_name}{member.id === profile.id && <small className="you-label">حساب شما</small>}</strong><span>{member.id === profile.id ? 'عضو واردشده' : 'عضو فعال نَوِرا'}</span></div></div>
-            <div className="member-cell-dept"><i style={{ '--dept-color': department.color }} />{department.name}</div>
-            <div><span className={`role-chip role-${member.role}`}>{member.role === 'super_admin' && <Crown size={13} />}{ROLE_LABELS[member.role]}</span></div>
-            <div className="member-cell-date">{faDate(member.created_at)}</div>
-            <div className="member-cell-actions">
-              {superAdmin && member.role === 'department_admin' && <button className="button button-outline button-small" onClick={() => revokeAdmin(member.id, member.department)}><Ban size={14} /> عزل مدیر</button>}
-              {canDeactivate && <button title="حذف از اعضای فعال" aria-label={`حذف ${member.full_name} از اعضای فعال`} className="button button-danger-ghost button-small member-remove-button" onClick={() => setMemberToDeactivate(member)}><UserMinus size={15} /> حذف دسترسی</button>}
-              {!canDeactivate && !(superAdmin && member.role === 'department_admin') && <span className="muted-dash">—</span>}
-            </div>
-          </div>;
-        }) : <div className="members-empty-state"><Users size={28} /><strong>عضوی با این مشخصات پیدا نشد</strong><span>عبارت جست‌وجو یا فیلتر تیم را تغییر دهید.</span></div>}
-      </div>
-      <div className="members-table-foot"><span><i /> نمایش اعضای فعال</span><span>{toFaDigits(displayedMembers.length)} نفر در این فهرست</span></div>
-    </section>
-
-    {memberToDeactivate && <div className="member-confirm-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !deactivating) setMemberToDeactivate(null); }}>
-      <section className="member-confirm-dialog" role="dialog" aria-modal="true" aria-labelledby="member-confirm-title" aria-describedby="member-confirm-description">
-        <button className="member-confirm-close" type="button" aria-label="بستن" disabled={deactivating} onClick={() => setMemberToDeactivate(null)}><X size={18} /></button>
-        <div className="member-confirm-icon"><UserMinus size={24} /></div>
-        <span className="section-kicker">MEMBER ACCESS</span>
-        <h2 id="member-confirm-title">حذف عضو از فهرست فعال؟</h2>
-        <p id="member-confirm-description"><strong>{memberToDeactivate.full_name}</strong> دیگر به فضای کاری نَوِرا دسترسی نخواهد داشت. سوابق و فعالیت‌های مرتبط برای حفظ تاریخچه سازمان باقی می‌مانند.</p>
-        <div className="member-confirm-actions"><button className="button button-secondary" type="button" disabled={deactivating} onClick={() => setMemberToDeactivate(null)}>انصراف</button><button className="button button-danger-ghost member-confirm-submit" type="button" disabled={deactivating} onClick={confirmDeactivate}>{deactivating ? 'در حال اعمال…' : 'تأیید و حذف دسترسی'} <UserMinus size={16} /></button></div>
-      </section>
-    </div>}
-  </div>;
-}
-
-function SettingsPage({ profile, signOut }) {
-  const department = getDepartment(profile.department);
-  return <div className="page-content"><PageHeader eyebrow="ACCOUNT / PREFERENCES" title="حساب کاربری" description="اطلاعات اصلی حساب و وضعیت دسترسی خودت را بررسی کن." />
-    <div className="settings-grid"><section className="settings-profile-card"><div className="settings-cover" style={{ '--dept-color': department.color }}><div className="settings-cover-shape" /><div className="settings-cover-label">NOWERA MEMBER PROFILE</div></div><div className="settings-profile-info"><Avatar profile={profile} size="large" /><div><h2>{profile.full_name}</h2><p>{profile.phone}</p></div></div><div className="settings-profile-details"><div><span>بخش تخصصی</span><strong>{department.name} · {department.english}</strong></div><div><span>سطح دسترسی</span><strong>{ROLE_LABELS[profile.role]}</strong></div><div><span>تاریخ عضویت</span><strong>{faDate(profile.created_at)}</strong></div><div><span>وضعیت حساب</span><strong className="active-text"><i /> فعال</strong></div></div></section>
-      <section className="settings-side-stack"><article className="settings-info-card"><div className="settings-info-icon"><ShieldCheck size={20} /></div><div><h3>امنیت و دسترسی</h3><p>دسترسی بخش‌ها بر اساس نقش کاربر و سیاست‌های امنیتی پایگاه‌داده کنترل می‌شود. تغییر نقش فقط از طریق مدیر اصلی امکان‌پذیر است.</p></div></article><article className="settings-info-card"><div className="settings-info-icon gold"><Bell size={20} /></div><div><h3>اعلان‌ها و پیگیری</h3><p>برای بررسی درخواست‌ها، وضعیت پروژه‌ها و رویدادهای جدید، از صفحه‌های پروژه، تسک و تقویم استفاده کن.</p></div></article><article className="settings-signout-card"><div><h3>پایان این نشست</h3><p>هنگام استفاده از دستگاه مشترک از حساب خارج شو.</p></div><button className="button button-danger-ghost" onClick={signOut}><LogOut size={15} /> خروج از حساب</button></article></section></div>
-  </div>;
-}
-
-function StatusPill({ status, type = 'task' }) {
-  let label = status;
-  if (type === 'project') label = PROJECT_STATUS[status] || status;
-  else if (type === 'task') label = TASK_STATUS[status] || status;
-  else if (type === 'report') label = ({ new: 'جدید', reviewing: 'در حال بررسی', resolved: 'رسیدگی‌شده' })[status] || status;
-  const classStatus = status || 'unknown';
-  return <span className={`status-pill status-${classStatus}`}><i />{label}</span>;
-}
-
-function RequestRow({ row, kind, data, decideRequest }) {
-  const project = kind === 'project' ? data.projects.find((p) => p.id === row.project_id) : data.projects.find((p) => p.id === data.tasks.find((t) => t.id === row.task_id)?.project_id);
-  const task = kind === 'task' ? data.tasks.find((t) => t.id === row.task_id) : null;
-  const person = data.profiles.find((p) => p.id === row.user_id);
-  if (!project || !person) return null;
-  return <div className="request-row"><Avatar profile={person} size="small" /><div className="request-row-main"><strong>{person.full_name}</strong><span>{kind === 'project' ? `درخواست عضویت در ${project.title}` : `درخواست تسک ${task?.title || ''}`} · {getDepartment(project.department).name}</span></div><span className="request-time">{faDate(row.requested_at)}</span><div className="request-row-actions"><button className="request-approve" title="تأیید" onClick={() => decideRequest(kind, row.id, 'approved')}><Check size={16} /></button><button className="request-reject" title="رد درخواست" onClick={() => decideRequest(kind, row.id, 'rejected')}><X size={16} /></button></div></div>;
-}
-
-function EmptyState({ icon, title, description, action }) {
-  return <div className="empty-state"><div className="empty-state-icon">{icon}</div><h3>{title}</h3><p>{description}</p>{action && <div className="empty-state-action">{action}</div>}</div>;
-}
-
-function ActionDialog({ dialog, close, profile, data, handlers }) {
-  const record = dialog.record || {};
-  const [form, setForm] = useState(() => ({
-    department: record.department || (profile.role === 'department_admin' ? profile.department : profile.department || 'Technoplus'),
-    title: record.title || '', description: record.description || '', details: record.details || '',
-    status: record.status || (dialog.type.toLowerCase().includes('task') ? 'todo' : 'active'), priority: record.priority || 'medium', deadline: record.deadline || '', due_date: record.due_date || '',
-    project_id: record.project_id || '', event_date: '', message: '', target_admin_id: '',
-  }));
-  const [busy, setBusy] = useState(false);
-  const update = (key, value) => setForm((old) => ({ ...old, [key]: value }));
-  const titleMap = { project: 'ساخت پروژه جدید', editProject: 'ویرایش پروژه', task: 'تعریف تسک جدید', editTask: 'ویرایش تسک', event: 'ثبت رویداد در تقویم', report: 'ثبت گزارش محرمانه' };
-  const descriptionMap = { project: 'اطلاعات پایه پروژه و تیم مسئول را وارد کنید.', editProject: 'عنوان، شرح، وضعیت و مهلت پروژه را به‌روزرسانی کنید.', task: 'تسک را به یکی از پروژه‌های قابل مدیریت متصل کنید.', editTask: 'جزئیات اجرایی و وضعیت تسک را اصلاح کنید.', event: 'جلسه، ددلاین یا رویداد مهم را ثبت کنید.', report: 'گزارش شما فقط برای مدیر اصلی قابل مشاهده خواهد بود.' };
-  const projects = data.projects.filter((project) => isManager(profile, project.department));
-  const admins = data.profiles.filter((member) => member.is_active && member.role !== 'member');
-  const availableDepartments = DEPARTMENTS.filter((department) => profile.role !== 'department_admin' || department.id === profile.department);
-  const isProjectForm = dialog.type === 'project' || dialog.type === 'editProject';
-  const isTaskForm = dialog.type === 'task' || dialog.type === 'editTask';
-  const isEditing = dialog.type.startsWith('edit');
-  const submit = async (event) => {
-    event.preventDefault(); setBusy(true);
-    let success = false;
-    if (dialog.type === 'project') success = await handlers.createProject(form);
-    if (dialog.type === 'task') success = await handlers.createTask(form);
-    if (dialog.type === 'editProject') success = await handlers.updateProject(record.id, { title: form.title.trim(), description: form.description.trim(), status: form.status, deadline: form.deadline || null });
-    if (dialog.type === 'editTask') success = await handlers.updateTask(record.id, { title: form.title.trim(), description: form.description.trim(), status: form.status, priority: form.priority, due_date: form.due_date || null });
-    if (dialog.type === 'event') success = await handlers.createEvent(form);
-    if (dialog.type === 'report') success = await handlers.createReport(form);
-    setBusy(false); if (success) close();
-  };
-  const modalIcon = isProjectForm ? <FolderKanban size={20} /> : isTaskForm ? <ClipboardList size={20} /> : dialog.type === 'event' ? <CalendarDays size={20} /> : <MessageSquareWarning size={20} />;
-  return <div className="modal-scrim" onClick={close}><section className="action-modal" onClick={(e) => e.stopPropagation()}><div className="action-modal-header"><div className="action-modal-icon">{modalIcon}</div><div><span className="section-kicker">NOWERA WORKSPACE</span><h2>{titleMap[dialog.type]}</h2><p>{descriptionMap[dialog.type]}</p></div><button className="modal-close" onClick={close} aria-label="بستن"><X size={18} /></button></div>
-    <form className="action-form" onSubmit={submit}>
-      {isProjectForm && <><label>عنوان پروژه<input required minLength={2} maxLength={140} value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="نام مشخص و کوتاه پروژه" /></label><label>توضیحات<textarea rows={3} value={form.description} onChange={(e) => update('description', e.target.value)} placeholder="هدف پروژه، خروجی مورد انتظار و توضیحات…" /></label><div className="form-grid-two">{!isEditing && <label>تیم مسئول<select value={form.department} onChange={(e) => update('department', e.target.value)}>{availableDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label>}<label>وضعیت پروژه<select value={form.status} onChange={(e) => update('status', e.target.value)}><option value="planning">در برنامه‌ریزی</option><option value="active">در حال اجرا</option><option value="paused">متوقف</option><option value="completed">تکمیل‌شده</option></select></label></div><label>ددلاین پروژه<input type="date" value={form.deadline} onChange={(e) => update('deadline', e.target.value)} /></label></>}
-      {isTaskForm && <>{!isEditing && <label>پروژه مرتبط<select required value={form.project_id} onChange={(e) => update('project_id', e.target.value)}><option value="">انتخاب پروژه…</option>{projects.map((p) => <option key={p.id} value={p.id}>{p.title} · {getDepartment(p.department).name}</option>)}</select></label>}<label>عنوان تسک<input required minLength={2} maxLength={160} value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="مثلاً طراحی نسخه اولیه صفحه اصلی" /></label><label>شرح و خروجی مورد انتظار<textarea rows={3} value={form.description} onChange={(e) => update('description', e.target.value)} placeholder="جزئیات اجرا، معیار تکمیل و نکات مهم…" /></label><div className="form-grid-two"><label>اولویت<select value={form.priority} onChange={(e) => update('priority', e.target.value)}><option value="low">کم</option><option value="medium">متوسط</option><option value="high">زیاد</option><option value="urgent">فوری</option></select></label><label>وضعیت<select value={form.status} onChange={(e) => update('status', e.target.value)}><option value="todo">شروع‌نشده</option><option value="in_progress">در حال انجام</option><option value="review">بررسی</option><option value="done">تکمیل‌شده</option></select></label></div><label>ددلاین<input type="date" value={form.due_date} onChange={(e) => update('due_date', e.target.value)} /></label></>}
-      {dialog.type === 'event' && <><label>عنوان رویداد<input required minLength={2} maxLength={140} value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="مثلاً جلسه هفتگی تیم" /></label><label>تیم برگزارکننده<select value={form.department} onChange={(e) => update('department', e.target.value)}>{availableDepartments.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label><label>تاریخ و ساعت<input required type="datetime-local" value={form.event_date} onChange={(e) => update('event_date', e.target.value)} /></label><label>جزئیات<textarea rows={3} value={form.details} onChange={(e) => update('details', e.target.value)} placeholder="محل جلسه، دستور کار یا توضیحات تکمیلی…" /></label></>}
-      {dialog.type === 'report' && <><div className="form-note-private"><ShieldCheck size={17} /><span>نام و مشخصات حساب برای پیگیری نزد مدیر اصلی محفوظ است. مدیر بخش گزارش را نمی‌بیند.</span></div><label>موضوع گزارش<input required minLength={3} maxLength={160} value={form.title} onChange={(e) => update('title', e.target.value)} placeholder="خلاصه‌ای از موضوع" /></label><div className="form-grid-two"><label>بخش مرتبط<select value={form.department} onChange={(e) => update('department', e.target.value)}>{DEPARTMENTS.map((d) => <option key={d.id} value={d.id}>{d.name}</option>)}</select></label><label>مدیر مرتبط (اختیاری)<select value={form.target_admin_id} onChange={(e) => update('target_admin_id', e.target.value)}><option value="">مشخص نشده</option>{admins.map((admin) => <option value={admin.id} key={admin.id}>{admin.full_name} · {ROLE_LABELS[admin.role]}</option>)}</select></label></div><label>شرح گزارش<textarea rows={5} required minLength={5} maxLength={5000} value={form.message} onChange={(e) => update('message', e.target.value)} placeholder="موضوع را با جزئیات کافی، زمان تقریبی و هر زمینه لازم توضیح دهید…" /></label></>}
-      <div className="action-form-footer"><button type="button" className="button button-ghost" onClick={close}>انصراف</button><button type="submit" disabled={busy} className="button button-primary">{busy ? <span className="button-spinner" /> : dialog.type === 'report' ? <Send size={16} /> : isEditing ? <Pencil size={16} /> : <Check size={16} />}{busy ? 'در حال ذخیره…' : dialog.type === 'report' ? 'ارسال محرمانه گزارش' : isEditing ? 'ذخیره تغییرات' : 'ذخیره و ثبت'}<ArrowLeft size={15} /></button></div>
-    </form></section></div>;
-}
-
-function ConfirmDialog({ dialog, close }) {
-  const [busy, setBusy] = useState(false);
-  const confirm = async () => {
-    if (busy) return;
-    setBusy(true);
-    try {
-      const success = await dialog.onConfirm?.();
-      if (success) close();
-    } finally { setBusy(false); }
-  };
-  return <div className="member-confirm-overlay" role="presentation" onMouseDown={(event) => { if (event.target === event.currentTarget && !busy) close(); }}><section className="member-confirm-dialog confirm-action-dialog" role="dialog" aria-modal="true" aria-labelledby="confirm-action-title" aria-describedby="confirm-action-description"><button className="member-confirm-close" type="button" aria-label="بستن" disabled={busy} onClick={close}><X size={18} /></button><div className="member-confirm-icon"><Trash2 size={23} /></div><span className="section-kicker">CONFIRM ACTION</span><h2 id="confirm-action-title">{dialog.title}</h2><p id="confirm-action-description">{dialog.description}</p><div className="member-confirm-actions"><button className="button button-secondary" type="button" disabled={busy} onClick={close}>انصراف</button><button className="button button-danger-ghost member-confirm-submit" type="button" disabled={busy} onClick={confirm}>{busy ? 'در حال انجام…' : dialog.confirmLabel || 'تأیید'} <Trash2 size={15} /></button></div></section></div>;
-}
-
-function toFaDigits(value) {
-  return String(value ?? '').replace(/[0-9]/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
 }

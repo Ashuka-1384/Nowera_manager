@@ -37,9 +37,47 @@ export function initials(name = '') {
   const parts = name.trim().split(/\s+/).filter(Boolean);
   return parts.length > 1 ? `${parts[0][0] || ''}${parts[1][0] || ''}` : (parts[0] || '?').slice(0, 2);
 }
+// Date-only values ("2026-11-10") must be read as LOCAL dates. new Date('2026-11-10') is UTC
+// midnight, which shows up as the previous day in every timezone behind UTC.
+export function parseDate(value) {
+  if (!value) return null;
+  if (value instanceof Date) return Number.isNaN(value.getTime()) ? null : value;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+    const [y, m, d] = value.split('-').map(Number);
+    return new Date(y, m - 1, d, 12);
+  }
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed;
+}
 export function faDate(date, options = { year: 'numeric', month: 'short', day: 'numeric' }) {
-  if (!date) return '—';
-  try { return new Intl.DateTimeFormat('fa-IR', options).format(new Date(date)); } catch { return '—'; }
+  const parsed = parseDate(date);
+  if (!parsed) return '—';
+  try { return new Intl.DateTimeFormat('fa-IR', options).format(parsed); } catch { return '—'; }
+}
+export function toFaDigits(value) {
+  return String(value ?? '').replace(/[0-9]/g, (digit) => '۰۱۲۳۴۵۶۷۸۹'[Number(digit)]);
+}
+export function localDateKey(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+// 'overdue' | 'today' | 'soon' (<= 3 days) | 'ok' | null
+export function dueState(task) {
+  if (!task?.due_date || task.status === 'done') return null;
+  const due = parseDate(task.due_date);
+  if (!due) return null;
+  const today = new Date(); today.setHours(12, 0, 0, 0);
+  const diff = Math.round((new Date(due).setHours(12, 0, 0, 0) - today.getTime()) / 86400000);
+  if (diff < 0) return 'overdue';
+  if (diff === 0) return 'today';
+  return diff <= 3 ? 'soon' : 'ok';
+}
+export function progressOf(tasks) {
+  const total = tasks.length;
+  const done = tasks.filter((task) => task.status === 'done').length;
+  return { total, done, pct: total ? Math.round((done / total) * 100) : 0 };
 }
 export function isManager(profile, department) {
   return profile?.role === 'super_admin' || (profile?.role === 'department_admin' && (!department || profile.department === department));

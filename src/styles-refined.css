@@ -5,7 +5,7 @@
  * replacing components or changing data/auth flows.
  */
 
-@import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;600;700&family=Estedad:wght@300;400;500;600;700;800&family=Vazirmatn:wght@300;400;500;600;700;800&display=swap');
+/* Fonts are loaded from index.html (non-blocking, display=swap). */
 
 :root {
   font-family: 'Estedad', 'Vazirmatn', 'DM Sans', sans-serif;

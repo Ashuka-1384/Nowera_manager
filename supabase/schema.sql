@@ -163,6 +163,56 @@ $$;
 revoke all on function public.deactivate_member(uuid) from public, anon, authenticated;
 grant execute on function public.deactivate_member(uuid) to authenticated;
 
+-- v1.3: bring a deactivated member back. Same scope rules as deactivate_member.
+create or replace function public.reactivate_member(p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare target public.profiles%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  select * into target from public.profiles where id = p_user_id for update;
+  if not found then raise exception 'Member not found' using errcode = 'P0002'; end if;
+  if target.role = 'super_admin' then raise exception 'A super admin account cannot be moved from this panel' using errcode = '42501'; end if;
+  if not public.is_super_admin() and not (
+    target.role = 'member' and exists (
+      select 1 from public.profiles actor
+      where actor.id = auth.uid() and actor.is_active = true and actor.role = 'department_admin' and actor.department = target.department
+    )
+  ) then
+    raise exception 'Only the super admin or the target department admin can restore this member' using errcode = '42501';
+  end if;
+  if target.is_active then return; end if;
+  update public.profiles set is_active = true where id = p_user_id;
+  if not found then raise exception 'Member state could not be updated' using errcode = 'P0001'; end if;
+end;
+$$;
+revoke all on function public.reactivate_member(uuid) from public, anon, authenticated;
+grant execute on function public.reactivate_member(uuid) to authenticated;
+
+-- v1.3: the super admin can move a member to another division.
+-- A department admin loses the admin role when moved, because that role is scoped to one division.
+create or replace function public.change_member_department(p_user_id uuid, p_department text)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare target public.profiles%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  if not public.is_super_admin() then raise exception 'Only the super admin can move members between departments' using errcode = '42501'; end if;
+  if p_department not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen') then raise exception 'Unknown department' using errcode = '22023'; end if;
+  select * into target from public.profiles where id = p_user_id for update;
+  if not found then raise exception 'Member not found' using errcode = 'P0002'; end if;
+  if target.role = 'super_admin' then raise exception 'A super admin account cannot be moved from this panel' using errcode = '42501'; end if;
+  if target.department = p_department then return; end if;
+  update public.profiles
+  set department = p_department,
+      role = case when target.role = 'department_admin' then 'member' else target.role end
+  where id = p_user_id;
+  if not found then raise exception 'Member state could not be updated' using errcode = 'P0001'; end if;
+end;
+$$;
+revoke all on function public.change_member_department(uuid, text) from public, anon, authenticated;
+grant execute on function public.change_member_department(uuid, text) to authenticated;
+
 create or replace function public.my_department()
 returns text language sql stable security definer set search_path = public
 as $$ select p.department from public.profiles p where p.id = auth.uid() and p.is_active = true limit 1; $$;
@@ -351,7 +401,7 @@ where p.id is null
 on conflict (id) do nothing;
 
 -- Prevent a user from self-promoting or changing their phone/section.
--- A department admin may only deactivate a normal member in their own department.
+-- A department admin may only deactivate/restore a normal member in their own department.
 create or replace function public.guard_profile_privileges()
 returns trigger language plpgsql security definer set search_path = public
 as $$
@@ -388,7 +438,6 @@ begin
       and new.role = old.role
       and new.department = old.department
       and new.phone = old.phone
-      and new.is_active = false
     ) then
       raise exception 'Insufficient privileges to change this profile';
     end if;
@@ -457,6 +506,7 @@ drop policy if exists "active users can view active directory" on public.profile
 create policy "active users can view active directory" on public.profiles
 for select to authenticated using (
   id = auth.uid()
+  or public.can_manage_department(department)
   or (
     public.is_active_user() and is_active = true and (
       public.is_super_admin()
