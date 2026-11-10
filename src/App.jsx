@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { LogOut, ShieldCheck } from 'lucide-react';
 import { supabase, supabaseHost, isSupabaseConfigured } from './lib/supabase';
 import { isManager } from './lib/helpers';
+import { createMemberOps } from './lib/memberOps';
 import { BrandMark, ConfirmDialog, ErrorBoundary, LoadingScreen, Toast } from './components/ui';
 import { Landing, AuthModal } from './components/Landing';
 import { Sidebar, Topbar } from './components/Shell';
@@ -233,15 +234,17 @@ export default function App() {
     return result;
   }, 'تسک‌های تکمیل‌شده پاک شدند.');
 
-  const rpc = (name, args, message) => runMutation(() => supabase.rpc(name, args), message);
-  const assignProjectMember = (projectId, userId) => rpc('assign_project_member', { p_project_id: projectId, p_user_id: userId }, 'عضو مستقیماً به پروژه اضافه شد.');
-  const assignTaskMember = (taskId, userId) => rpc('assign_task_member', { p_task_id: taskId, p_user_id: userId }, 'عضو مستقیماً به تسک تخصیص داده شد.');
-  const removeProjectMember = (projectId, userId) => rpc('remove_project_member', { p_project_id: projectId, p_user_id: userId }, 'عضو و تخصیص‌های تسک او از این پروژه برداشته شد.');
-  const removeTaskMember = (taskId, userId) => rpc('remove_task_member', { p_task_id: taskId, p_user_id: userId }, 'عضو از این تسک خارج شد.');
-  const deactivateMember = (userId) => rpc('deactivate_member', { p_user_id: userId }, 'دسترسی عضو بسته شد.');
-  const reactivateMember = (userId) => rpc('reactivate_member', { p_user_id: userId }, 'دسترسی عضو بازگردانده شد.');
-  const deleteMemberPermanently = (userId) => rpc('delete_member_permanently', { p_user_id: userId }, 'عضو برای همیشه حذف شد.');
-  const changeMemberDepartment = (userId, department) => rpc('change_member_department', { p_user_id: userId, p_department: department }, 'عضو به بخش جدید منتقل شد.');
+  // Each operation calls its database function and transparently falls back to guarded table writes
+  // if the API layer cannot see that function (see src/lib/memberOps.js).
+  const ops = createMemberOps(supabase, profile, () => data);
+  const assignProjectMember = (projectId, userId) => runMutation(() => ops.assignProjectMember(projectId, userId), 'عضو مستقیماً به پروژه اضافه شد.');
+  const assignTaskMember = (taskId, userId) => runMutation(() => ops.assignTaskMember(taskId, userId), 'عضو مستقیماً به تسک تخصیص داده شد.');
+  const removeProjectMember = (projectId, userId) => runMutation(() => ops.removeProjectMember(projectId, userId), 'عضو و تخصیص‌های تسک او از این پروژه برداشته شد.');
+  const removeTaskMember = (taskId, userId) => runMutation(() => ops.removeTaskMember(taskId, userId), 'عضو از این تسک خارج شد.');
+  const deactivateMember = (userId) => runMutation(() => ops.deactivateMember(userId), 'دسترسی عضو بسته شد.');
+  const reactivateMember = (userId) => runMutation(() => ops.reactivateMember(userId), 'دسترسی عضو بازگردانده شد.');
+  const deleteMemberPermanently = (userId) => runMutation(() => ops.deleteMemberPermanently(userId), 'عضو برای همیشه حذف شد.');
+  const changeMemberDepartment = (userId, department) => runMutation(() => ops.changeMemberDepartment(userId, department), 'عضو به بخش جدید منتقل شد.');
   const assignAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت بخش اعطا شد.', true);
   const revokeAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت لغو شد.', true);
 
@@ -297,7 +300,7 @@ export default function App() {
           <div key={activePage} className="nv-page-enter">{allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
         </ErrorBoundary>
       </div>
-      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4 · فضای یکپارچه تیم</span></footer>
+      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4.2 · فضای یکپارچه تیم</span></footer>
     </main>
     {dialog && <ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} />}
     {confirmDialog && <ConfirmDialog dialog={confirmDialog} close={() => setConfirmDialog(null)} />}

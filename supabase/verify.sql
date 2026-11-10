@@ -19,7 +19,7 @@ with checks(area, item, ok) as (
   select 'rls helper (executable by signed-in users)', f,
          to_regprocedure('public.' || f) is not null and has_function_privilege('authenticated', 'public.' || f, 'execute')
     from unnest(array['is_super_admin()','is_active_user()','my_department()','can_manage_department(text)',
-                      'is_project_member(uuid,uuid)','can_access_task(uuid)','can_update_task(uuid)']) f
+                      'is_project_member(uuid,uuid)','can_access_task(uuid)','can_update_task(uuid)','is_assignable_member(uuid)']) f
   union all
   select 'row level security', t, coalesce((select relrowsecurity from pg_class where oid = to_regclass('public.' || t)), false)
     from unnest(array['profiles','projects','project_members','tasks','task_members','events','reports']) t

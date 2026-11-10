@@ -286,7 +286,7 @@ begin
                                'is_project_member', 'can_access_task', 'can_update_task', 'deactivate_member',
                                'reactivate_member', 'change_member_department', 'delete_member_permanently',
                                'assign_project_member', 'assign_task_member', 'remove_project_member',
-                               'remove_task_member', 'handle_new_user', 'guard_profile_privileges',
+                               'remove_task_member', 'is_assignable_member', 'handle_new_user', 'guard_profile_privileges',
                                'guard_task_member_updates', 'touch_updated_at', 'list_public_members',
                                'my_profile_phone')
   loop
@@ -562,6 +562,12 @@ as $$
     or exists (select 1 from public.task_members tm where tm.task_id = p_task_id and tm.user_id = auth.uid() and tm.status = 'approved')
   );
 $$;
+
+-- v1.4.2: used by the policies below so a manager can assign members through plain table
+-- writes even if the API layer cannot see the RPC functions above.
+create or replace function public.is_assignable_member(p_user_id uuid)
+returns boolean language sql stable security definer set search_path = public
+as $$ select exists (select 1 from public.profiles p where p.id = p_user_id and p.is_active = true and p.role = 'member'); $$;
 
 -- Create each profile from the submitted phone metadata (SMS verification is intentionally not used).
 -- v1.4: never RAISES. A raise here makes Supabase reject the whole signup (and the
@@ -843,6 +849,22 @@ for delete to authenticated using (
   user_id = auth.uid() or exists (select 1 from public.tasks t join public.projects p on p.id = t.project_id where t.id = task_id and public.can_manage_department(p.department))
 );
 
+
+-- v1.4.2: managers may enrol an ACTIVE team member directly (same rule the assign_* RPCs enforce).
+-- Members still cannot approve themselves: their own insert policy only allows status = 'pending'.
+drop policy if exists "managers assign project participants" on public.project_members;
+create policy "managers assign project participants" on public.project_members
+for insert to authenticated with check (
+  public.is_assignable_member(user_id)
+  and exists (select 1 from public.projects p where p.id = project_id and public.can_manage_department(p.department))
+);
+drop policy if exists "managers assign task participants" on public.task_members;
+create policy "managers assign task participants" on public.task_members
+for insert to authenticated with check (
+  public.is_assignable_member(user_id)
+  and exists (select 1 from public.tasks t join public.projects p on p.id = t.project_id where t.id = task_id and public.can_manage_department(p.department))
+);
+
 -- Separate calendars, scoped for writes to the appropriate department admin.
 drop policy if exists "active users view events" on public.events;
 create policy "active users view events" on public.events
@@ -890,6 +912,7 @@ revoke execute on function public.can_manage_department(text) from public, anon;
 revoke execute on function public.is_project_member(uuid, uuid) from public, anon;
 revoke execute on function public.can_access_task(uuid) from public, anon;
 revoke execute on function public.can_update_task(uuid) from public, anon;
+revoke execute on function public.is_assignable_member(uuid) from public, anon;
 grant execute on function public.is_super_admin() to authenticated;
 grant execute on function public.is_active_user() to authenticated;
 grant execute on function public.my_department() to authenticated;
@@ -897,6 +920,7 @@ grant execute on function public.can_manage_department(text) to authenticated;
 grant execute on function public.is_project_member(uuid, uuid) to authenticated;
 grant execute on function public.can_access_task(uuid) to authenticated;
 grant execute on function public.can_update_task(uuid) to authenticated;
+grant execute on function public.is_assignable_member(uuid) to authenticated;
 
 -- RPCs called by the web app: signed-in users only (authorization is re-checked inside each function).
 revoke all on function public.deactivate_member(uuid) from public, anon, authenticated;
@@ -966,7 +990,7 @@ with checks(area, item, ok) as (
   select 'rls helper (executable by signed-in users)', f,
          to_regprocedure('public.' || f) is not null and has_function_privilege('authenticated', 'public.' || f, 'execute')
     from unnest(array['is_super_admin()','is_active_user()','my_department()','can_manage_department(text)',
-                      'is_project_member(uuid,uuid)','can_access_task(uuid)','can_update_task(uuid)']) f
+                      'is_project_member(uuid,uuid)','can_access_task(uuid)','can_update_task(uuid)','is_assignable_member(uuid)']) f
   union all
   select 'row level security', t, coalesce((select relrowsecurity from pg_class where oid = to_regclass('public.' || t)), false)
     from unnest(array['profiles','projects','project_members','tasks','task_members','events','reports']) t
