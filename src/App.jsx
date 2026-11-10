@@ -1,6 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut, ShieldCheck } from 'lucide-react';
-import { supabase, isSupabaseConfigured } from './lib/supabase';
+import { supabase, supabaseHost, isSupabaseConfigured } from './lib/supabase';
 import { isManager } from './lib/helpers';
 import { BrandMark, ConfirmDialog, ErrorBoundary, LoadingScreen, Toast } from './components/ui';
 import { Landing, AuthModal } from './components/Landing';
@@ -314,7 +314,7 @@ function explainError(error) {
 
   if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|timeout/i.test(message)) return 'ارتباط با Supabase برقرار نشد. اینترنت/VPN، آدرس پروژه و کلید را بررسی کن و npm run diagnose را اجرا کن.';
   // The function really is missing from the API (never ran, rolled back, or the API cache is stale).
-  if (code === 'PGRST202' || /could not find the function/i.test(message)) return 'تابع موردنیاز در دیتابیس پیدا نشد. فایل کامل supabase/schema.sql را در SQL Editor اجرا کن و مطمئن شو اجرا بدون خطا تمام شده و آخرین جدول همه‌جا OK است؛ سپس چند ثانیه صبر کن و دوباره تلاش کن.';
+  if (code === 'PGRST202' || /could not find the function/i.test(message)) return `API دیتابیس این تابع را نمی‌شناسد. برنامه به پروژه‌ی «${supabaseHost}» وصل است؛ مطمئن شو schema.sql دقیقاً در همین پروژه اجرا شده (آدرس را با Project URL در Supabase مقایسه کن). اگر همین پروژه است، در SQL Editor دستور  NOTIFY pgrst, 'reload schema';  را جداگانه اجرا کن یا پروژه را Restart کن. جزئیات: ${message}`;
   if (/permission denied for function/i.test(message)) return 'اجرای این تابع برای کاربران واردشده مجاز نشده است. فایل supabase/schema.sql را دوباره کامل اجرا کن (بخش GRANT ها).';
   if (/permission denied for (table|schema)/i.test(message)) return withCode('دسترسی جدول برای نقش کاربران واردشده بسته است؛ supabase/schema.sql را دوباره کامل اجرا کن.');
   if (/schema cache|PGRST204|PGRST200/i.test(message)) return withCode('ساختار دیتابیس با نسخه برنامه هم‌خوان نیست؛ supabase/schema.sql را کامل اجرا کن.');

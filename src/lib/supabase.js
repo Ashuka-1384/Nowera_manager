@@ -27,6 +27,9 @@ export const isSupabaseConfigured = Boolean(
   !isSecretKey(publicKey)
 );
 
+// Host of the project this build talks to (shown in diagnostics so a wrong Vercel env var is obvious).
+export const supabaseHost = (() => { try { return new URL(url).host; } catch { return ''; } })();
+
 export const supabase = isSupabaseConfigured
   ? createClient(url, publicKey, {
       auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true },
