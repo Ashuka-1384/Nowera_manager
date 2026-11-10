@@ -91,7 +91,7 @@ export function AuthModal({ mode, setMode, close, notify }) {
       setBusy(false);
     }
   };
-  return <div className="modal-scrim" onClick={close}><section className="auth-modal" onClick={(e) => e.stopPropagation()}>
+  return <div className="modal-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}><section className="auth-modal">
     <button className="modal-close" onClick={close} aria-label="بستن"><X size={18} /></button><div className="auth-modal-brand"><BrandMark /><span className="auth-vertical-line" /></div>
     <div className="auth-heading"><span className="section-kicker">{isSignup ? 'BECOME A PART OF NOWERA' : 'WELCOME BACK'}</span><h2>{isSignup ? 'به نَوِرا خوش آمدی.' : 'دوباره خوش آمدی.'}</h2><p>{isSignup ? 'پروفایل خودت را بساز و مسیر همکاری را شروع کن.' : 'با شماره موبایل و رمز عبورت وارد فضای کاری شو.'}</p></div>
     <form className="auth-form" onSubmit={submit}>

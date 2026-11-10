@@ -30,6 +30,41 @@ const fileEnv = {
 const url = (process.env.VITE_SUPABASE_URL || fileEnv.VITE_SUPABASE_URL || '').trim().replace(/\/$/, '');
 const key = (process.env.VITE_SUPABASE_PUBLISHABLE_KEY || fileEnv.VITE_SUPABASE_PUBLISHABLE_KEY || process.env.VITE_SUPABASE_ANON_KEY || fileEnv.VITE_SUPABASE_ANON_KEY || '').trim();
 
+
+const ZERO = '00000000-0000-0000-0000-000000000000';
+const MEMBER_RPCS = {
+  deactivate_member: { p_user_id: ZERO },
+  reactivate_member: { p_user_id: ZERO },
+  change_member_department: { p_user_id: ZERO, p_department: 'Technoplus' },
+  delete_member_permanently: { p_user_id: ZERO },
+  assign_project_member: { p_project_id: ZERO, p_user_id: ZERO },
+  assign_task_member: { p_task_id: ZERO, p_user_id: ZERO },
+  remove_project_member: { p_project_id: ZERO, p_user_id: ZERO },
+  remove_task_member: { p_task_id: ZERO, p_user_id: ZERO },
+};
+
+// Calls each RPC WITHOUT signing in. A function that exists but is (correctly) closed to anonymous
+// users answers "permission denied" (42501); a function that does not exist answers PGRST202 / 404.
+// Nothing can be changed this way: every function rejects unauthenticated callers.
+async function checkMemberRpcs() {
+  const missing = [];
+  for (const [name, args] of Object.entries(MEMBER_RPCS)) {
+    try {
+      const res = await fetch(`${url}/rest/v1/rpc/${name}`, {
+        method: 'POST',
+        headers: { apikey: key, Authorization: `Bearer ${key}`, 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+        signal: AbortSignal.timeout(12000),
+      });
+      const text = await res.text();
+      if (res.status === 404 || /PGRST202|could not find the function/i.test(text)) missing.push(name);
+    } catch {
+      missing.push(`${name} (پاسخی دریافت نشد)`);
+    }
+  }
+  return missing;
+}
+
 console.log('\nNOWERA · بررسی اتصال\n');
 if (!url || !key) {
   console.error('✗ متغیرهای اتصال پیدا نشدند. دستور npm run setup را اجرا کن.');
@@ -60,12 +95,22 @@ try {
   if (response.ok) {
     const result = await response.json();
     console.log(`✓ اتصال به Supabase برقرار است؛ RPC فهرست اعضا کار می‌کند (${Array.isArray(result) ? result.length : 0} عضو قابل نمایش).`);
-    console.log('✓ اتصال و schema اولیه آماده‌اند.');
+    const missing = await checkMemberRpcs();
+    if (missing.length) {
+      console.error('\n✗ این توابع مدیریتی در دیتابیس وجود ندارند (برای همین حذف عضو / افزودن عضو به پروژه و تسک کار نمی‌کند):');
+      missing.forEach((name) => console.error(`   - ${name}`));
+      console.error('  راه‌حل: فایل کامل supabase/schema.sql را در SQL Editor اجرا کن و مطمئن شو بدون خطا تمام شد و جدول آخر همه‌جا OK است.');
+      console.error('  اگر خطا دیدی، همان متن خطا علت دقیق است؛ نسخه‌ی جدید schema روی دیتابیس‌های قدیمی هم خودکار ارتقا می‌دهد.');
+      process.exitCode = 1;
+    } else {
+      console.log('✓ همه‌ی توابع مدیریت اعضا، پروژه و تسک در دیتابیس وجود دارند.');
+      console.log('✓ اتصال و schema آماده‌اند. (برای بررسی کامل دسترسی‌ها، supabase/verify.sql را در SQL Editor اجرا کن.)');
+    }
   } else {
     const body = await response.text();
     if (response.status === 401 || response.status === 403) {
       console.error(`✗ Supabase کلید را نپذیرفت (HTTP ${response.status}). کلید Publishable/anon را دوباره بررسی کن.`);
-    } else if (/list_public_members|function.*not found|PGRST202|PGRST202/i.test(body) || response.status === 404) {
+    } else if (/list_public_members|function.*not found|PGRST202/i.test(body) || response.status === 404) {
       console.error('✗ به پروژه وصل شدیم، اما تابع دیتابیس پیدا نشد. فایل supabase/schema.sql را کامل در SQL Editor اجرا کن.');
     } else {
       console.error(`✗ Supabase پاسخ HTTP ${response.status} داد: ${body.slice(0, 450)}`);

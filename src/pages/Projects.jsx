@@ -66,8 +66,10 @@ function ProjectCard({ index, project, profile, data, openDialog, confirmAction,
   const dept = getDepartment(project.department);
   const manager = isManager(profile, project.department);
   const membership = data.projectMembers.find((r) => r.project_id === project.id && r.user_id === profile.id);
-  const approved = data.projectMembers.filter((r) => r.project_id === project.id && r.status === 'approved');
-  const pending = data.projectMembers.filter((r) => r.project_id === project.id && r.status === 'pending');
+  // People whose access was closed stay in the history tables but must not clutter the team list or counts.
+  const isDeactivated = (userId) => data.profiles.find((p) => p.id === userId)?.is_active === false;
+  const approved = data.projectMembers.filter((r) => r.project_id === project.id && r.status === 'approved' && !isDeactivated(r.user_id));
+  const pending = data.projectMembers.filter((r) => r.project_id === project.id && r.status === 'pending' && !isDeactivated(r.user_id));
   const tasks = data.tasks.filter((t) => t.project_id === project.id);
   const prog = progressOf(tasks);
   const eligible = data.profiles.filter((m) => m.is_active && m.role === 'member' && !approved.some((r) => r.user_id === m.id));
@@ -120,7 +122,7 @@ function ProjectCard({ index, project, profile, data, openDialog, confirmAction,
         return <span className="nv-person" key={row.id}><Avatar profile={member || { full_name: 'عضو', department: project.department }} size="tiny" />{member?.full_name || 'عضو پروژه'}
           <button title="حذف از پروژه" aria-label="حذف عضو از پروژه" onClick={() => confirmAction({ title: 'حذف عضو از پروژه؟', icon: UserMinus, description: `عضویت این فرد در «${project.title}» و تخصیص‌های تسک او نیز لغو می‌شود.`, confirmLabel: 'حذف عضویت', onConfirm: () => removeProjectMember(project.id, row.user_id) })}><UserMinus size={13} /></button></span>;
       })}</div> : <p className="nv-muted-text">هنوز عضوی به این پروژه اضافه نشده است.</p>}
-      <div className="nv-assign"><select className="nv-select is-small" value={memberToAdd} onChange={(e) => setMemberToAdd(e.target.value)} aria-label="انتخاب عضو برای افزودن"><option value="">افزودن عضو فعال…</option>{eligible.map((m) => <option key={m.id} value={m.id}>{m.full_name} · {getDepartment(m.department).name}</option>)}</select>
+      <div className="nv-assign"><select className="nv-select is-small" value={memberToAdd} onChange={(e) => setMemberToAdd(e.target.value)} aria-label="انتخاب عضو برای افزودن"><option value="">{eligible.length ? 'افزودن عضو فعال…' : 'عضو فعالی برای افزودن وجود ندارد'}</option>{eligible.map((m) => <option key={m.id} value={m.id}>{m.full_name} · {getDepartment(m.department).name}</option>)}</select>
         <button className="button button-primary button-small" disabled={!memberToAdd} onClick={async () => { if (await assignProjectMember(project.id, memberToAdd)) setMemberToAdd(''); }}><UserPlus size={14} /> افزودن</button></div>
       {pending.length > 0 && <p className="nv-note">{toFaDigits(pending.length)} درخواست در انتظار بررسی در ستون کناری است.</p>}
     </div>}

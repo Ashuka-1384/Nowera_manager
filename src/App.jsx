@@ -18,6 +18,7 @@ import SettingsPage from './pages/Settings';
 const EMPTY_DATA = { profiles: [], publicMembers: [], projects: [], tasks: [], events: [], reports: [], projectMembers: [], taskMembers: [] };
 const PAGES = ['overview', 'projects', 'tasks', 'calendar', 'teams', 'reports', 'members', 'settings'];
 const STALE_AFTER_MS = 45000;
+const DATA_LABELS = { profiles: 'اعضا', projects: 'پروژه‌ها', tasks: 'تسک‌ها', events: 'رویدادها', reports: 'گزارش‌ها', projectMembers: 'عضویت پروژه‌ها', taskMembers: 'عضویت تسک‌ها', publicMembers: 'فهرست عمومی اعضا' };
 const pageFromHash = () => { const id = window.location.hash.replace('#', ''); return PAGES.includes(id) ? id : 'overview'; };
 
 export default function App() {
@@ -28,6 +29,7 @@ export default function App() {
   const [profileError, setProfileError] = useState('');
   const [data, setData] = useState(EMPTY_DATA);
   const [dataLoading, setDataLoading] = useState(false);
+  const [dataIssues, setDataIssues] = useState([]);
   const [landingMembers, setLandingMembers] = useState([]);
   const [activePage, setActivePageState] = useState(pageFromHash);
   const [mobileNav, setMobileNav] = useState(false);
@@ -111,15 +113,18 @@ export default function App() {
         supabase.rpc('list_public_members'),
       ]);
       const keys = ['profiles', 'projects', 'tasks', 'events', 'reports', 'projectMembers', 'taskMembers', 'publicMembers'];
-      // Keep the previous rows for any query that failed instead of silently emptying that section.
+      // Keep the previous rows for any query that failed instead of silently emptying that section,
+      // and REPORT the failure: an empty member picker with no explanation looks exactly like "adding members is broken".
+      const issues = results
+        .map((result, index) => (result.error ? { key: keys[index], label: DATA_LABELS[keys[index]] || keys[index], message: result.error.message || '', code: result.error.code || '' } : null))
+        .filter(Boolean);
+      issues.forEach((issue) => console.warn(`${issue.key} query failed:`, issue.code, issue.message));
       setData((previous) => {
         const next = { ...previous };
-        results.forEach((result, index) => {
-          if (!result.error && Array.isArray(result.data)) next[keys[index]] = result.data;
-          else if (result.error) console.warn(`${keys[index]} query:`, result.error.message);
-        });
+        results.forEach((result, index) => { if (!result.error && Array.isArray(result.data)) next[keys[index]] = result.data; });
         return next;
       });
+      setDataIssues(issues);
       lastLoadedAt.current = Date.now();
     } catch (error) {
       console.error('Could not load NOWERA data:', error);
@@ -138,7 +143,7 @@ export default function App() {
 
   useEffect(() => {
     if (session?.user?.id) loadProfile(session.user.id);
-    else { setProfile(null); setProfileError(''); setData(EMPTY_DATA); }
+    else { setProfile(null); setProfileError(''); setData(EMPTY_DATA); setDataIssues([]); }
   }, [session?.user?.id, loadProfile]);
 
   useEffect(() => { if (profile?.id && profile.is_active) loadData(); }, [profile?.id, profile?.is_active, loadData]);
@@ -235,6 +240,7 @@ export default function App() {
   const removeTaskMember = (taskId, userId) => rpc('remove_task_member', { p_task_id: taskId, p_user_id: userId }, 'عضو از این تسک خارج شد.');
   const deactivateMember = (userId) => rpc('deactivate_member', { p_user_id: userId }, 'دسترسی عضو بسته شد.');
   const reactivateMember = (userId) => rpc('reactivate_member', { p_user_id: userId }, 'دسترسی عضو بازگردانده شد.');
+  const deleteMemberPermanently = (userId) => rpc('delete_member_permanently', { p_user_id: userId }, 'عضو برای همیشه حذف شد.');
   const changeMemberDepartment = (userId, department) => rpc('change_member_department', { p_user_id: userId, p_department: department }, 'عضو به بخش جدید منتقل شد.');
   const assignAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت بخش اعطا شد.', true);
   const revokeAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت لغو شد.', true);
@@ -244,7 +250,7 @@ export default function App() {
     requestProject, requestTask, decideRequest, updateTask, updateProject, updateEvent, moveTask,
     deleteProject, deleteTask, deleteEvent, deleteReport, clearDoneTasks,
     assignProjectMember, assignTaskMember, removeProjectMember, removeTaskMember,
-    updateReport, assignAdmin, revokeAdmin, deactivateMember, reactivateMember, changeMemberDepartment, signOut,
+    updateReport, assignAdmin, revokeAdmin, deactivateMember, reactivateMember, deleteMemberPermanently, changeMemberDepartment, signOut,
   };
 
   const badges = useMemo(() => {
@@ -280,12 +286,18 @@ export default function App() {
     <main className="nv-main">
       <Topbar profile={profile} dataLoading={dataLoading} setMobileNav={setMobileNav} onRefresh={refresh} activePage={activePage} />
       {profileError && <div className="inline-error">{profileError}</div>}
+      {dataIssues.length > 0 && <div className="inline-error" role="alert">
+        <strong>بخشی از داده‌ها بارگذاری نشد: {dataIssues.map((i) => i.label).join('، ')}.</strong>{' '}
+        {dataIssues.some((i) => /fetch|network|timeout/i.test(i.message)) ? 'اتصال اینترنت/VPN را بررسی کن.' : 'معمولاً یعنی supabase/schema.sql کامل (و بدون خطا) اجرا نشده است؛ آن را دوباره اجرا کن و آخرین جدول «OK/MISSING» را بررسی کن.'}
+        <span dir="ltr" style={{ display: 'block', opacity: 0.75, fontSize: '0.8em', marginTop: 4 }}>{dataIssues.map((i) => `${i.key}: ${i.code || 'error'} ${i.message}`).join(' | ')}</span>
+        {' '}<button className="button button-small button-ghost" onClick={refresh}>تلاش دوباره</button>
+      </div>}
       <div className="nv-page">
         <ErrorBoundary resetKey={activePage}>
           <div key={activePage} className="nv-page-enter">{allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
         </ErrorBoundary>
       </div>
-      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.3 · فضای یکپارچه تیم</span></footer>
+      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4 · فضای یکپارچه تیم</span></footer>
     </main>
     {dialog && <ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} />}
     {confirmDialog && <ConfirmDialog dialog={confirmDialog} close={() => setConfirmDialog(null)} />}
@@ -295,17 +307,29 @@ export default function App() {
 
 function explainError(error) {
   const message = error?.message || String(error || 'خطای نامشخص');
+  const code = error?.code || '';
+  // Always keep the raw cause visible in the console; the toast shows a friendly sentence plus the code.
+  console.error('NOWERA operation failed:', { code, message, details: error?.details, hint: error?.hint });
+  const withCode = (text) => (code ? `${text} (کد ${code})` : text);
+
   if (/failed to fetch|fetch failed|networkerror|network request failed|load failed|timeout/i.test(message)) return 'ارتباط با Supabase برقرار نشد. اینترنت/VPN، آدرس پروژه و کلید را بررسی کن و npm run diagnose را اجرا کن.';
-  if (/deactivate_member|reactivate_member|change_member_department|assign_project_member|assign_task_member|remove_project_member|remove_task_member|PGRST202|schema cache/i.test(message)) return 'نسخه دیتابیس هنوز به‌روز نشده است؛ فایل کامل supabase/schema.sql جدید را در SQL Editor اجرا کن و سپس دوباره تلاش کن.';
-  if (/row-level security|permission denied|insufficient privilege|42501/i.test(message) && !/only the super admin|cannot/i.test(message)) return 'دسترسی این عملیات برای نقش فعلی مجاز نیست.';
+  // The function really is missing from the API (never ran, rolled back, or the API cache is stale).
+  if (code === 'PGRST202' || /could not find the function/i.test(message)) return 'تابع موردنیاز در دیتابیس پیدا نشد. فایل کامل supabase/schema.sql را در SQL Editor اجرا کن و مطمئن شو اجرا بدون خطا تمام شده و آخرین جدول همه‌جا OK است؛ سپس چند ثانیه صبر کن و دوباره تلاش کن.';
+  if (/permission denied for function/i.test(message)) return 'اجرای این تابع برای کاربران واردشده مجاز نشده است. فایل supabase/schema.sql را دوباره کامل اجرا کن (بخش GRANT ها).';
+  if (/permission denied for (table|schema)/i.test(message)) return withCode('دسترسی جدول برای نقش کاربران واردشده بسته است؛ supabase/schema.sql را دوباره کامل اجرا کن.');
+  if (/schema cache|PGRST204|PGRST200/i.test(message)) return withCode('ساختار دیتابیس با نسخه برنامه هم‌خوان نیست؛ supabase/schema.sql را کامل اجرا کن.');
   if (/only the super admin or the target department admin/i.test(message)) return 'این عملیات فقط برای مدیر اصلی یا مدیر همان بخش مجاز است.';
   if (/only the super admin|only super.admin/i.test(message)) return 'این عملیات فقط برای مدیر اصلی مجاز است.';
   if (/cannot remove your own|own account/i.test(message)) return 'برای جلوگیری از قفل‌شدن پنل، امکان تغییر دسترسی حساب خودت وجود ندارد.';
-  if (/super admin account cannot be (removed|moved)|cannot deactivate a super.admin/i.test(message)) return 'حساب مدیر اصلی از داخل پنل قابل تغییر نیست.';
+  if (/super admin account cannot be (removed|moved)|cannot deactivate a super.admin|super-admin profiles cannot/i.test(message)) return 'حساب مدیر اصلی از داخل پنل قابل تغییر نیست.';
+  if (/deactivate the member first/i.test(message)) return 'برای حذف دائمی، ابتدا باید دسترسی عضو بسته شود.';
+  if (/cannot manage this (project|task)/i.test(message)) return 'مدیریت این پروژه یا تسک برای نقش فعلی تو مجاز نیست.';
   if (/member not found|project not found|task not found|membership not found|could not be updated/i.test(message)) return 'عضو، پروژه یا تسک پیدا نشد یا وضعیت آن تغییر کرده است؛ فهرست را تازه‌سازی و دوباره بررسی کن.';
   if (/only an active team member/i.test(message)) return 'فقط اعضای فعال و عادی تیم قابل تخصیص هستند.';
-  if (/must be an approved project participant/i.test(message)) return 'برای تخصیص تسک، ابتدا باید عضویت فرد در همان پروژه تأیید شده باشد.';
+  if (/must be an approved project participant/i.test(message)) return 'ابتدا عضویت فرد در همان پروژه باید تأیید شده باشد.';
+  if (/authentication required|JWT|session/i.test(message)) return 'نشست شما معتبر نیست؛ خارج شو و دوباره وارد شو.';
+  if (/row-level security|permission denied|insufficient privilege|42501/i.test(message)) return withCode('دسترسی این عملیات برای نقش فعلی مجاز نیست.');
   if (/duplicate key|already exists/i.test(message)) return 'این درخواست قبلاً ثبت شده است.';
-  if (/JWT|session/i.test(message)) return 'نشست شما معتبر نیست؛ خارج شو و دوباره وارد شو.';
-  return message;
+  if (/foreign key|violates/i.test(message)) return withCode('این مورد به رکوردهای دیگری وابسته است و نمی‌توان آن را تغییر داد.');
+  return withCode(message);
 }

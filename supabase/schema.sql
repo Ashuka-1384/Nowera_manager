@@ -1,6 +1,15 @@
--- NOWERA Management · Supabase / PostgreSQL bootstrap
--- Run this file in Supabase SQL Editor using the project owner. Re-running it is supported.
--- New signups never receive admin privileges from submitted phone metadata; bootstrap the first super-admin through trusted SQL.
+-- ============================================================================
+-- NOWERA Management · Supabase / PostgreSQL schema  (v1.4)
+--
+-- HOW TO RUN: Supabase → SQL Editor → New query → paste this WHOLE file → Run.
+-- It is safe to run any number of times, on an empty project AND on a project
+-- that already contains an older NOWERA schema (it upgrades tables in place,
+-- clears stale policies/triggers/functions from older versions, then rebuilds
+-- everything). The last statement prints a checklist: every row must say OK.
+--
+-- Security note: new signups never receive admin rights from submitted phone
+-- metadata. Bootstrap the first super-admin through trusted SQL (see README).
+-- ============================================================================
 
 create extension if not exists pgcrypto;
 
@@ -85,12 +94,210 @@ create table if not exists public.reports (
   reviewed_at timestamptz
 );
 
+
+-- ---------------------------------------------------------------------------
+-- UPGRADE STEP 1 — bring tables created by OLDER versions up to date.
+-- `create table if not exists` never alters an existing table, so a project that
+-- already had an older NOWERA schema used to fail halfway (e.g. "column
+-- p.is_active does not exist"). Because the SQL Editor runs a script as a single
+-- transaction, that failure rolled back EVERYTHING — including the member RPCs —
+-- which is why removing members / assigning members kept failing after "running
+-- the schema". The block below makes the script converge from any earlier state.
+-- ---------------------------------------------------------------------------
+do $upgrade$
+declare
+  r record;
+  has_nulls boolean;
+begin
+  for r in
+    select * from (values
+      ('profiles',        'full_name',    'text',        $v$'عضو جدید'$v$,  true),
+      ('profiles',        'phone',        'text',        null,              false),
+      ('profiles',        'department',   'text',        $v$'Technoplus'$v$, true),
+      ('profiles',        'role',         'text',        $v$'member'$v$,    true),
+      ('profiles',        'is_active',    'boolean',     'true',            true),
+      ('profiles',        'avatar_url',   'text',        null,              false),
+      ('profiles',        'created_at',   'timestamptz', 'now()',           true),
+      ('projects',        'department',   'text',        $v$'Technoplus'$v$, true),
+      ('projects',        'description',  'text',        $v$''$v$,          true),
+      ('projects',        'status',       'text',        $v$'active'$v$,    true),
+      ('projects',        'deadline',     'date',        null,              false),
+      ('projects',        'created_by',   'uuid',        null,              true),
+      ('projects',        'created_at',   'timestamptz', 'now()',           true),
+      ('projects',        'updated_at',   'timestamptz', 'now()',           true),
+      ('project_members', 'status',       'text',        $v$'pending'$v$,   true),
+      ('project_members', 'requested_at', 'timestamptz', 'now()',           true),
+      ('project_members', 'decided_by',   'uuid',        null,              false),
+      ('project_members', 'decided_at',   'timestamptz', null,              false),
+      ('tasks',           'description',  'text',        $v$''$v$,          true),
+      ('tasks',           'status',       'text',        $v$'todo'$v$,      true),
+      ('tasks',           'priority',     'text',        $v$'medium'$v$,    true),
+      ('tasks',           'due_date',     'date',        null,              false),
+      ('tasks',           'created_by',   'uuid',        null,              true),
+      ('tasks',           'created_at',   'timestamptz', 'now()',           true),
+      ('tasks',           'updated_at',   'timestamptz', 'now()',           true),
+      ('task_members',    'status',       'text',        $v$'pending'$v$,   true),
+      ('task_members',    'requested_at', 'timestamptz', 'now()',           true),
+      ('task_members',    'decided_by',   'uuid',        null,              false),
+      ('task_members',    'decided_at',   'timestamptz', null,              false),
+      ('events',          'department',   'text',        $v$'Technoplus'$v$, true),
+      ('events',          'details',      'text',        $v$''$v$,          true),
+      ('events',          'created_by',   'uuid',        null,              true),
+      ('events',          'created_at',   'timestamptz', 'now()',           true),
+      ('reports',         'target_admin_id', 'uuid',     null,              false),
+      ('reports',         'department',   'text',        $v$'Technoplus'$v$, true),
+      ('reports',         'status',       'text',        $v$'new'$v$,       true),
+      ('reports',         'reviewed_by',  'uuid',        null,              false),
+      ('reports',         'created_at',   'timestamptz', 'now()',           true),
+      ('reports',         'reviewed_at',  'timestamptz', null,              false)
+    ) as v(tbl, col, typ, def, nn)
+  loop
+    execute format('alter table public.%I add column if not exists %I %s', r.tbl, r.col, r.typ);
+    if r.def is not null then
+      execute format('alter table public.%I alter column %I set default %s', r.tbl, r.col, r.def);
+      execute format('update public.%I set %I = %s where %I is null', r.tbl, r.col, r.def, r.col);
+    end if;
+    if r.nn then
+      execute format('select exists (select 1 from public.%I where %I is null)', r.tbl, r.col) into has_nulls;
+      if not has_nulls then
+        execute format('alter table public.%I alter column %I set not null', r.tbl, r.col);
+      end if;
+    end if;
+  end loop;
+end
+$upgrade$;
+
+-- Normalise legacy values so the CHECK constraints below cannot be violated.
+update public.profiles set role = 'member'        where role not in ('member', 'department_admin', 'super_admin');
+update public.profiles set department = 'Technoplus' where department not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen');
+update public.projects set department = 'Technoplus' where department not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen');
+update public.projects set status = 'active'      where status not in ('planning', 'active', 'paused', 'completed');
+update public.events   set department = 'Technoplus' where department not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen');
+update public.reports  set department = 'Technoplus' where department not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen');
+update public.reports  set status = 'new'         where status not in ('new', 'reviewing', 'resolved');
+update public.tasks    set status = 'todo'        where status not in ('todo', 'in_progress', 'review', 'done');
+update public.tasks    set priority = 'medium'    where priority not in ('low', 'medium', 'high', 'urgent');
+update public.project_members set status = 'pending' where status not in ('pending', 'approved', 'rejected');
+update public.task_members    set status = 'pending' where status not in ('pending', 'approved', 'rejected');
+
+-- Older versions used differently named CHECK constraints; drop them all and re-add
+-- one canonical set. NOT VALID = enforced for every new/changed row without
+-- rescanning (and possibly failing on) historical rows.
+do $checks$
+declare r record;
+begin
+  for r in
+    select conrelid::regclass::text as tbl, conname
+    from pg_constraint
+    where contype = 'c'
+      and conrelid in ('public.profiles'::regclass, 'public.projects'::regclass, 'public.project_members'::regclass,
+                       'public.tasks'::regclass, 'public.task_members'::regclass, 'public.events'::regclass,
+                       'public.reports'::regclass)
+  loop
+    execute format('alter table %s drop constraint %I', r.tbl, r.conname);
+  end loop;
+end
+$checks$;
+
+alter table public.profiles add constraint profiles_full_name_len check (char_length(full_name) between 2 and 100) not valid;
+alter table public.profiles add constraint profiles_department_chk check (department in ('Lumen', 'Atlas', 'Technoplus', 'Horizen')) not valid;
+alter table public.profiles add constraint profiles_role_chk check (role in ('member', 'department_admin', 'super_admin')) not valid;
+alter table public.projects add constraint projects_department_chk check (department in ('Lumen', 'Atlas', 'Technoplus', 'Horizen')) not valid;
+alter table public.projects add constraint projects_title_len check (char_length(title) between 2 and 140) not valid;
+alter table public.projects add constraint projects_status_chk check (status in ('planning', 'active', 'paused', 'completed')) not valid;
+alter table public.project_members add constraint project_members_status_chk check (status in ('pending', 'approved', 'rejected')) not valid;
+alter table public.tasks add constraint tasks_title_len check (char_length(title) between 2 and 160) not valid;
+alter table public.tasks add constraint tasks_status_chk check (status in ('todo', 'in_progress', 'review', 'done')) not valid;
+alter table public.tasks add constraint tasks_priority_chk check (priority in ('low', 'medium', 'high', 'urgent')) not valid;
+alter table public.task_members add constraint task_members_status_chk check (status in ('pending', 'approved', 'rejected')) not valid;
+alter table public.events add constraint events_department_chk check (department in ('Lumen', 'Atlas', 'Technoplus', 'Horizen')) not valid;
+alter table public.events add constraint events_title_len check (char_length(title) between 2 and 140) not valid;
+alter table public.reports add constraint reports_department_chk check (department in ('Lumen', 'Atlas', 'Technoplus', 'Horizen')) not valid;
+alter table public.reports add constraint reports_title_len check (char_length(title) between 3 and 160) not valid;
+alter table public.reports add constraint reports_message_len check (char_length(message) between 5 and 5000) not valid;
+alter table public.reports add constraint reports_status_chk check (status in ('new', 'reviewing', 'resolved')) not valid;
+
+-- The assign_* RPCs use ON CONFLICT (project_id, user_id) / (task_id, user_id),
+-- which only works when a matching unique index exists. Older tables may lack it
+-- (or contain duplicates); remove duplicates (keep the approved/newest row) first.
+delete from public.project_members a using public.project_members b
+where a.project_id = b.project_id and a.user_id = b.user_id and a.id <> b.id
+  and ((b.status = 'approved' and a.status <> 'approved') or (b.status = a.status and a.id < b.id));
+delete from public.task_members a using public.task_members b
+where a.task_id = b.task_id and a.user_id = b.user_id and a.id <> b.id
+  and ((b.status = 'approved' and a.status <> 'approved') or (b.status = a.status and a.id < b.id));
+create unique index if not exists project_members_project_user_uidx on public.project_members (project_id, user_id);
+create unique index if not exists task_members_task_user_uidx on public.task_members (task_id, user_id);
+
 create index if not exists projects_department_idx on public.projects(department, created_at desc);
 create index if not exists project_members_user_status_idx on public.project_members(user_id, status);
 create index if not exists tasks_project_idx on public.tasks(project_id, status, due_date);
 create index if not exists task_members_user_status_idx on public.task_members(user_id, status);
 create index if not exists events_department_date_idx on public.events(department, event_date);
 create index if not exists reports_created_idx on public.reports(created_at desc);
+
+-- ---------------------------------------------------------------------------
+-- UPGRADE STEP 2 — clear leftovers of older versions.
+-- A stale trigger or function with a different name/signature is invisible to
+-- `create or replace` yet can silently block updates (e.g. an old guard trigger
+-- that rejects is_active changes) or make `create or replace` fail outright
+-- ("cannot change return type of existing function"). Everything below is
+-- re-created in full afterwards, so nothing of value is lost.
+-- ---------------------------------------------------------------------------
+do $cleanup$
+declare r record;
+begin
+  -- all RLS policies on NOWERA tables
+  for r in select schemaname, tablename, policyname from pg_policies
+           where schemaname = 'public'
+             and tablename in ('profiles', 'projects', 'project_members', 'tasks', 'task_members', 'events', 'reports')
+  loop
+    execute format('drop policy %I on %I.%I', r.policyname, r.schemaname, r.tablename);
+  end loop;
+
+  -- all non-internal triggers on NOWERA tables
+  for r in select c.relname, t.tgname
+           from pg_trigger t
+           join pg_class c on c.oid = t.tgrelid
+           join pg_namespace n on n.oid = c.relnamespace
+           where n.nspname = 'public'
+             and c.relname in ('profiles', 'projects', 'project_members', 'tasks', 'task_members', 'events', 'reports')
+             and not t.tgisinternal
+  loop
+    execute format('drop trigger %I on public.%I', r.tgname, r.relname);
+  end loop;
+
+  -- the signup trigger on auth.users — only triggers that call OUR function, whatever they are named
+  for r in select t.tgname
+           from pg_trigger t
+           join pg_proc p on p.oid = t.tgfoid
+           join pg_namespace pn on pn.oid = p.pronamespace
+           where t.tgrelid = 'auth.users'::regclass and not t.tgisinternal
+             and pn.nspname = 'public' and p.proname = 'handle_new_user'
+  loop
+    execute format('drop trigger %I on auth.users', r.tgname);
+  end loop;
+
+  -- every overload of NOWERA's own functions (so a changed signature/return type cannot block re-creation)
+  for r in select p.oid::regprocedure::text as sig
+           from pg_proc p join pg_namespace n on n.oid = p.pronamespace
+           where n.nspname = 'public'
+             and p.proname in ('is_super_admin', 'is_active_user', 'my_department', 'can_manage_department',
+                               'is_project_member', 'can_access_task', 'can_update_task', 'deactivate_member',
+                               'reactivate_member', 'change_member_department', 'delete_member_permanently',
+                               'assign_project_member', 'assign_task_member', 'remove_project_member',
+                               'remove_task_member', 'handle_new_user', 'guard_profile_privileges',
+                               'guard_task_member_updates', 'touch_updated_at', 'list_public_members',
+                               'my_profile_phone')
+  loop
+    begin
+      execute 'drop function ' || r.sig;
+    exception when dependent_objects_still_exist then
+      raise notice 'Kept % (still referenced by an object outside NOWERA); it will be replaced in place.', r.sig;
+    end;
+  end loop;
+end
+$cleanup$;
 
 create or replace function public.is_super_admin()
 returns boolean language sql stable security definer set search_path = public
@@ -122,11 +329,7 @@ begin
     raise exception 'You cannot remove your own account' using errcode = '42501';
   end if;
 
-  select * into target
-  from public.profiles
-  where id = p_user_id
-  for update;
-
+  select * into target from public.profiles where id = p_user_id for update;
   if not found then
     raise exception 'Member not found' using errcode = 'P0002';
   end if;
@@ -137,10 +340,8 @@ begin
     target.role = 'member'
     and exists (
       select 1 from public.profiles actor
-      where actor.id = auth.uid()
-        and actor.is_active = true
-        and actor.role = 'department_admin'
-        and actor.department = target.department
+      where actor.id = auth.uid() and actor.is_active = true
+        and actor.role = 'department_admin' and actor.department = target.department
     )
   ) then
     raise exception 'Only the super admin or the target department admin can remove this member' using errcode = '42501';
@@ -151,19 +352,18 @@ begin
     return;
   end if;
 
-  update public.profiles
-  set is_active = false
-  where id = p_user_id;
-
+  update public.profiles set is_active = false where id = p_user_id;
   if not found then
     raise exception 'Member state could not be updated' using errcode = 'P0001';
   end if;
+
+  -- Their unanswered requests are noise for managers now; approved history stays.
+  delete from public.project_members where user_id = p_user_id and status = 'pending';
+  delete from public.task_members where user_id = p_user_id and status = 'pending';
 end;
 $$;
-revoke all on function public.deactivate_member(uuid) from public, anon, authenticated;
-grant execute on function public.deactivate_member(uuid) to authenticated;
 
--- v1.3: bring a deactivated member back. Same scope rules as deactivate_member.
+-- Bring a deactivated member back. Same scope rules as deactivate_member.
 create or replace function public.reactivate_member(p_user_id uuid)
 returns void language plpgsql security definer set search_path = public
 as $$
@@ -186,10 +386,8 @@ begin
   if not found then raise exception 'Member state could not be updated' using errcode = 'P0001'; end if;
 end;
 $$;
-revoke all on function public.reactivate_member(uuid) from public, anon, authenticated;
-grant execute on function public.reactivate_member(uuid) to authenticated;
 
--- v1.3: the super admin can move a member to another division.
+-- The super admin can move a member to another division.
 -- A department admin loses the admin role when moved, because that role is scoped to one division.
 create or replace function public.change_member_department(p_user_id uuid, p_department text)
 returns void language plpgsql security definer set search_path = public
@@ -210,8 +408,42 @@ begin
   if not found then raise exception 'Member state could not be updated' using errcode = 'P0001'; end if;
 end;
 $$;
-revoke all on function public.change_member_department(uuid, text) from public, anon, authenticated;
-grant execute on function public.change_member_department(uuid, text) to authenticated;
+
+-- v1.4: PERMANENT removal (super admin only, and only for an already deactivated member).
+-- Deleting the Auth user frees the phone number so the person may register again.
+-- Records the member created (projects / tasks / events) are handed to the acting
+-- super admin so nothing is lost; approvals/reviews they made are detached; reports
+-- they filed are deleted with them (ON DELETE CASCADE).
+create or replace function public.delete_member_permanently(p_user_id uuid)
+returns void language plpgsql security definer set search_path = public
+as $$
+declare target public.profiles%rowtype;
+begin
+  if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
+  if not public.is_super_admin() then raise exception 'Only the super admin can permanently delete a member' using errcode = '42501'; end if;
+  if p_user_id is null then raise exception 'Member id is required' using errcode = '22023'; end if;
+  if p_user_id = auth.uid() then raise exception 'You cannot remove your own account' using errcode = '42501'; end if;
+  select * into target from public.profiles where id = p_user_id for update;
+  if not found then raise exception 'Member not found' using errcode = 'P0002'; end if;
+  if target.role = 'super_admin' then raise exception 'A super admin account cannot be removed from this panel' using errcode = '42501'; end if;
+  if target.is_active then raise exception 'Deactivate the member first, then delete permanently' using errcode = '22023'; end if;
+
+  update public.projects set created_by = auth.uid() where created_by = p_user_id;
+  update public.tasks    set created_by = auth.uid() where created_by = p_user_id;
+  update public.events   set created_by = auth.uid() where created_by = p_user_id;
+  update public.project_members set decided_by = null where decided_by = p_user_id;
+  update public.task_members    set decided_by = null where decided_by = p_user_id;
+  update public.reports set reviewed_by = null where reviewed_by = p_user_id;
+  update public.reports set target_admin_id = null where target_admin_id = p_user_id;
+
+  -- profiles.id → auth.users(id) ON DELETE CASCADE, so this removes the profile and memberships too.
+  delete from auth.users where id = p_user_id;
+  if exists (select 1 from public.profiles where id = p_user_id) then
+    -- Fallback if Auth refused the delete: at least remove the profile row itself.
+    delete from public.profiles where id = p_user_id;
+  end if;
+end;
+$$;
 
 create or replace function public.my_department()
 returns text language sql stable security definer set search_path = public
@@ -255,6 +487,9 @@ begin
 end;
 $$;
 
+-- v1.4: assigning a task also enrols the member in the task's project when needed,
+-- so a manager no longer has to do a separate "add to project" step first
+-- (that hidden prerequisite is why the task member picker used to look empty).
 create or replace function public.assign_task_member(p_task_id uuid, p_user_id uuid)
 returns void language plpgsql security definer set search_path = public
 as $$
@@ -268,9 +503,10 @@ begin
   if not exists (select 1 from public.profiles where id = p_user_id and is_active = true and role = 'member') then
     raise exception 'Only an active team member can be assigned' using errcode = '22023';
   end if;
-  if not public.is_project_member(project_id_value, p_user_id) then
-    raise exception 'The member must be an approved project participant first' using errcode = '42501';
-  end if;
+  insert into public.project_members (project_id, user_id, status, decided_by, decided_at)
+  values (project_id_value, p_user_id, 'approved', auth.uid(), now())
+  on conflict (project_id, user_id) do update
+    set status = 'approved', decided_by = auth.uid(), decided_at = now();
   insert into public.task_members (task_id, user_id, status, decided_by, decided_at)
   values (p_task_id, p_user_id, 'approved', auth.uid(), now())
   on conflict (task_id, user_id) do update
@@ -278,10 +514,11 @@ begin
 end;
 $$;
 
+-- Removing is idempotent: removing someone who is already gone is a success, not an error.
 create or replace function public.remove_project_member(p_project_id uuid, p_user_id uuid)
 returns void language plpgsql security definer set search_path = public
 as $$
-declare project_department text; affected integer;
+declare project_department text;
 begin
   if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
   select department into project_department from public.projects where id = p_project_id;
@@ -290,35 +527,21 @@ begin
   delete from public.task_members tm using public.tasks t
   where tm.task_id = t.id and t.project_id = p_project_id and tm.user_id = p_user_id;
   delete from public.project_members where project_id = p_project_id and user_id = p_user_id;
-  get diagnostics affected = row_count;
-  if affected = 0 then raise exception 'Project membership not found' using errcode = 'P0002'; end if;
 end;
 $$;
 
 create or replace function public.remove_task_member(p_task_id uuid, p_user_id uuid)
 returns void language plpgsql security definer set search_path = public
 as $$
-declare project_department text; affected integer;
+declare project_department text;
 begin
   if auth.uid() is null then raise exception 'Authentication required' using errcode = '42501'; end if;
   select p.department into project_department from public.tasks t join public.projects p on p.id = t.project_id where t.id = p_task_id;
   if not found then raise exception 'Task not found' using errcode = 'P0002'; end if;
   if not public.can_manage_department(project_department) then raise exception 'You cannot manage this task' using errcode = '42501'; end if;
   delete from public.task_members where task_id = p_task_id and user_id = p_user_id;
-  get diagnostics affected = row_count;
-  if affected = 0 then raise exception 'Task membership not found' using errcode = 'P0002'; end if;
 end;
 $$;
-
-revoke all on function public.assign_project_member(uuid, uuid) from public, anon, authenticated;
-revoke all on function public.assign_task_member(uuid, uuid) from public, anon, authenticated;
-revoke all on function public.remove_project_member(uuid, uuid) from public, anon, authenticated;
-revoke all on function public.remove_task_member(uuid, uuid) from public, anon, authenticated;
-grant execute on function public.assign_project_member(uuid, uuid) to authenticated;
-grant execute on function public.assign_task_member(uuid, uuid) to authenticated;
-grant execute on function public.remove_project_member(uuid, uuid) to authenticated;
-grant execute on function public.remove_task_member(uuid, uuid) to authenticated;
-
 
 create or replace function public.can_access_task(p_task_id uuid)
 returns boolean language sql stable security definer set search_path = public
@@ -341,37 +564,43 @@ as $$
 $$;
 
 -- Create each profile from the submitted phone metadata (SMS verification is intentionally not used).
+-- v1.4: never RAISES. A raise here makes Supabase reject the whole signup (and the
+-- Dashboard → Authentication → "Add user" button) with a vague "Database error".
 create or replace function public.handle_new_user()
 returns trigger language plpgsql security definer set search_path = public, auth
 as $$
 declare
-  digits text;
   phone_value text;
   dept text;
+  display_name text;
 begin
-  -- The web app authenticates with an internal email alias to avoid SMS.
-  -- The actual phone is carried in Auth user metadata and stored in profiles.
   phone_value := coalesce(
     nullif(trim(new.raw_user_meta_data ->> 'phone'), ''),
     nullif(trim(new.phone), '')
   );
-  digits := regexp_replace(coalesce(phone_value, ''), '[^0-9]', '', 'g');
-  if phone_value is null or digits = '' then
-    raise exception 'NOWERA signup requires phone metadata';
+  -- The web app signs up with the alias phone-98912…@login.nowera.invalid.
+  if phone_value is null and new.email ~ '^phone-[0-9]+@login\.nowera\.invalid$' then
+    phone_value := '+' || substring(new.email from '^phone-([0-9]+)@');
   end if;
+  if phone_value is null then
+    phone_value := 'unset-' || new.id::text;   -- e.g. user added by hand in the Supabase dashboard
+  end if;
+
   dept := coalesce(new.raw_user_meta_data ->> 'department', 'Technoplus');
   if dept not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen') then dept := 'Technoplus'; end if;
+  display_name := left(coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'), 100);
+  if char_length(display_name) < 2 then display_name := 'عضو جدید'; end if;
 
-  insert into public.profiles (id, full_name, phone, department, role, is_active)
-  values (
-    new.id,
-    coalesce(nullif(trim(new.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'),
-    phone_value,
-    dept,
-    'member',
-    true
-  )
-  on conflict (id) do nothing;
+  begin
+    insert into public.profiles (id, full_name, phone, department, role, is_active)
+    values (new.id, display_name, phone_value, dept, 'member', true)
+    on conflict (id) do nothing;
+  exception when unique_violation then
+    -- Same phone already on another profile: keep the signup working with a distinct value.
+    insert into public.profiles (id, full_name, phone, department, role, is_active)
+    values (new.id, display_name, phone_value || '#' || left(new.id::text, 8), dept, 'member', true)
+    on conflict (id) do nothing;
+  end;
   return new;
 end;
 $$;
@@ -380,25 +609,37 @@ drop trigger if exists on_auth_user_created_nowera on auth.users;
 create trigger on_auth_user_created_nowera
 after insert on auth.users for each row execute procedure public.handle_new_user();
 
--- Backfill existing users that have a real phone either in Auth's phone field
--- (legacy Phone provider) or in user metadata (NOWERA's no-SMS email alias).
-insert into public.profiles (id, full_name, phone, department, role, is_active)
-select
-  u.id,
-  coalesce(nullif(trim(u.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'),
-  coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), u.phone),
-  case
-    when u.raw_user_meta_data ->> 'department' in ('Lumen', 'Atlas', 'Technoplus', 'Horizen')
-      then u.raw_user_meta_data ->> 'department'
-    else 'Technoplus'
-  end,
-  'member',
-  true
-from auth.users u
-left join public.profiles p on p.id = u.id
-where p.id is null
-  and regexp_replace(coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), u.phone, ''), '[^0-9]', '', 'g') <> ''
-on conflict (id) do nothing;
+-- Backfill auth users that have no profile (legacy Phone provider or the no-SMS email alias).
+-- Row by row, so one odd row can never abort the whole script.
+do $backfill$
+declare
+  u record;
+  phone_value text;
+  dept text;
+  display_name text;
+begin
+  for u in
+    select au.* from auth.users au left join public.profiles p on p.id = au.id where p.id is null
+  loop
+    phone_value := coalesce(nullif(trim(u.raw_user_meta_data ->> 'phone'), ''), nullif(trim(u.phone), ''));
+    if phone_value is null and u.email ~ '^phone-[0-9]+@login\.nowera\.invalid$' then
+      phone_value := '+' || substring(u.email from '^phone-([0-9]+)@');
+    end if;
+    if phone_value is null then continue; end if;   -- not a NOWERA account (no phone anywhere): leave it alone
+    dept := coalesce(u.raw_user_meta_data ->> 'department', 'Technoplus');
+    if dept not in ('Lumen', 'Atlas', 'Technoplus', 'Horizen') then dept := 'Technoplus'; end if;
+    display_name := left(coalesce(nullif(trim(u.raw_user_meta_data ->> 'full_name'), ''), 'عضو جدید'), 100);
+    if char_length(display_name) < 2 then display_name := 'عضو جدید'; end if;
+    begin
+      insert into public.profiles (id, full_name, phone, department, role, is_active)
+      values (u.id, display_name, phone_value, dept, 'member', true) on conflict (id) do nothing;
+    exception when unique_violation then
+      insert into public.profiles (id, full_name, phone, department, role, is_active)
+      values (u.id, display_name, phone_value || '#' || left(u.id::text, 8), dept, 'member', true) on conflict (id) do nothing;
+    end;
+  end loop;
+end
+$backfill$;
 
 -- Prevent a user from self-promoting or changing their phone/section.
 -- A department admin may only deactivate/restore a normal member in their own department.
@@ -449,11 +690,6 @@ $$;
 drop trigger if exists guard_profile_privileges_trigger on public.profiles;
 create trigger guard_profile_privileges_trigger before update on public.profiles
 for each row execute procedure public.guard_profile_privileges();
-
--- Intentionally do not assign or repair administrator roles based on phone metadata.
--- Re-running this schema preserves roles already assigned by a trusted administrator.
--- For a fresh instance, create the account, verify its identity out-of-band, then promote
--- its exact profile UUID manually in SQL Editor (see README.md).
 
 -- Keep timestamps fresh after edits.
 create or replace function public.touch_updated_at()
@@ -636,7 +872,7 @@ create policy "super admin deletes reports" on public.reports
 for delete to authenticated using (public.is_super_admin());
 
 -- Restrict table access to authenticated sessions; all authorization remains in RLS.
-grant usage on schema public to authenticated;
+grant usage on schema public to anon, authenticated;
 grant update on public.profiles to authenticated;
 grant select, insert, update, delete on public.projects to authenticated;
 grant select, insert, update, delete on public.project_members to authenticated;
@@ -644,7 +880,16 @@ grant select, insert, update, delete on public.tasks to authenticated;
 grant select, insert, update, delete on public.task_members to authenticated;
 grant select, insert, update, delete on public.events to authenticated;
 grant select, insert, update, delete on public.reports to authenticated;
+revoke delete on public.profiles from authenticated, anon;
 
+-- Helper functions used inside RLS policies must be executable by the signed-in role.
+revoke execute on function public.is_super_admin() from public, anon;
+revoke execute on function public.is_active_user() from public, anon;
+revoke execute on function public.my_department() from public, anon;
+revoke execute on function public.can_manage_department(text) from public, anon;
+revoke execute on function public.is_project_member(uuid, uuid) from public, anon;
+revoke execute on function public.can_access_task(uuid) from public, anon;
+revoke execute on function public.can_update_task(uuid) from public, anon;
 grant execute on function public.is_super_admin() to authenticated;
 grant execute on function public.is_active_user() to authenticated;
 grant execute on function public.my_department() to authenticated;
@@ -652,7 +897,24 @@ grant execute on function public.can_manage_department(text) to authenticated;
 grant execute on function public.is_project_member(uuid, uuid) to authenticated;
 grant execute on function public.can_access_task(uuid) to authenticated;
 grant execute on function public.can_update_task(uuid) to authenticated;
-revoke delete on public.profiles from authenticated, anon;
+
+-- RPCs called by the web app: signed-in users only (authorization is re-checked inside each function).
+revoke all on function public.deactivate_member(uuid) from public, anon, authenticated;
+revoke all on function public.reactivate_member(uuid) from public, anon, authenticated;
+revoke all on function public.change_member_department(uuid, text) from public, anon, authenticated;
+revoke all on function public.delete_member_permanently(uuid) from public, anon, authenticated;
+revoke all on function public.assign_project_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.assign_task_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.remove_project_member(uuid, uuid) from public, anon, authenticated;
+revoke all on function public.remove_task_member(uuid, uuid) from public, anon, authenticated;
+grant execute on function public.deactivate_member(uuid) to authenticated;
+grant execute on function public.reactivate_member(uuid) to authenticated;
+grant execute on function public.change_member_department(uuid, text) to authenticated;
+grant execute on function public.delete_member_permanently(uuid) to authenticated;
+grant execute on function public.assign_project_member(uuid, uuid) to authenticated;
+grant execute on function public.assign_task_member(uuid, uuid) to authenticated;
+grant execute on function public.remove_project_member(uuid, uuid) to authenticated;
+grant execute on function public.remove_task_member(uuid, uuid) to authenticated;
 
 -- Public landing-page directory: deliberately omits phone numbers and other private fields.
 create or replace function public.list_public_members()
@@ -675,3 +937,59 @@ as $$ select p.phone from public.profiles p where p.id = auth.uid() and p.is_act
 revoke select on table public.profiles from authenticated;
 grant select (id, full_name, department, role, is_active, avatar_url, created_at) on public.profiles to authenticated;
 grant execute on function public.my_profile_phone() to authenticated;
+
+revoke execute on function public.my_profile_phone() from public, anon;
+
+-- Make PostgREST (the Supabase Data API) notice the new/changed functions immediately.
+notify pgrst, 'reload schema';
+
+-- ---------------------------------------------------------------------------
+-- FINAL CHECKLIST — the result of this last statement is what the SQL Editor shows.
+-- Every row must say OK. Rows that say MISSING are listed first.
+-- (The same query is saved as supabase/verify.sql so you can re-run it any time.)
+-- ---------------------------------------------------------------------------
+with checks(area, item, ok) as (
+  select 'table', t, to_regclass('public.' || t) is not null
+    from unnest(array['profiles','projects','project_members','tasks','task_members','events','reports']) t
+  union all
+  select 'column', c, exists (select 1 from information_schema.columns
+                              where table_schema = 'public' and table_name = split_part(c, '.', 1) and column_name = split_part(c, '.', 2))
+    from unnest(array['profiles.is_active','profiles.role','profiles.avatar_url','projects.created_by','tasks.created_by',
+                      'project_members.decided_by','project_members.decided_at','task_members.decided_by','task_members.decided_at']) c
+  union all
+  select 'rpc (exists + executable by signed-in users)', f,
+         to_regprocedure('public.' || f) is not null and has_function_privilege('authenticated', 'public.' || f, 'execute')
+    from unnest(array['deactivate_member(uuid)','reactivate_member(uuid)','change_member_department(uuid,text)',
+                      'delete_member_permanently(uuid)','assign_project_member(uuid,uuid)','assign_task_member(uuid,uuid)',
+                      'remove_project_member(uuid,uuid)','remove_task_member(uuid,uuid)','my_profile_phone()','list_public_members()']) f
+  union all
+  select 'rls helper (executable by signed-in users)', f,
+         to_regprocedure('public.' || f) is not null and has_function_privilege('authenticated', 'public.' || f, 'execute')
+    from unnest(array['is_super_admin()','is_active_user()','my_department()','can_manage_department(text)',
+                      'is_project_member(uuid,uuid)','can_access_task(uuid)','can_update_task(uuid)']) f
+  union all
+  select 'row level security', t, coalesce((select relrowsecurity from pg_class where oid = to_regclass('public.' || t)), false)
+    from unnest(array['profiles','projects','project_members','tasks','task_members','events','reports']) t
+  union all
+  select 'policies exist', t, (select count(*) from pg_policies where schemaname = 'public' and tablename = t) > 0
+    from unnest(array['profiles','projects','project_members','tasks','task_members','events','reports']) t
+  union all
+  select 'unique index (needed by assign RPCs)', i, to_regclass('public.' || i) is not null
+    from unnest(array['project_members_project_user_uidx','task_members_task_user_uidx']) i
+  union all
+  select 'trigger', 'signup → profile (auth.users)',
+         exists (select 1 from pg_trigger where tgrelid = 'auth.users'::regclass and tgname = 'on_auth_user_created_nowera')
+  union all
+  select 'trigger', 'profile privilege guard',
+         exists (select 1 from pg_trigger where tgrelid = 'public.profiles'::regclass and tgname = 'guard_profile_privileges_trigger')
+  union all
+  select 'data', 'at least one active super admin',
+         exists (select 1 from public.profiles where role = 'super_admin' and is_active)
+  union all
+  select 'data', 'every NOWERA auth user has a profile',
+         not exists (select 1 from auth.users u left join public.profiles p on p.id = u.id
+                     where p.id is null and (u.raw_user_meta_data ? 'phone' or u.email like 'phone-%@login.nowera.invalid'))
+)
+select area, item, case when ok then 'OK' else 'MISSING  <<<' end as status
+from checks
+order by ok, area, item;

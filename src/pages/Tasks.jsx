@@ -80,8 +80,13 @@ function TaskCard({ task, index = 0, movable, showStatus, profile, data, openDia
   const state = dueState(task);
   const taskMembership = data.taskMembers.find((r) => r.task_id === task.id && r.user_id === profile.id);
   const canRequest = data.projectMembers.some((r) => r.project_id === project.id && r.user_id === profile.id && r.status === 'approved');
-  const approved = data.taskMembers.filter((r) => r.task_id === task.id && r.status === 'approved');
-  const eligible = data.projectMembers.filter((r) => r.project_id === project.id && r.status === 'approved' && !approved.some((a) => a.user_id === r.user_id)).map((r) => data.profiles.find((p) => p.id === r.user_id)).filter((m) => m?.is_active && m.role === 'member');
+  const isDeactivated = (userId) => data.profiles.find((p) => p.id === userId)?.is_active === false;
+  const approved = data.taskMembers.filter((r) => r.task_id === task.id && r.status === 'approved' && !isDeactivated(r.user_id));
+  // Any active team member can be assigned; the database enrols them in the project first when needed.
+  const inProject = new Set(data.projectMembers.filter((r) => r.project_id === project.id && r.status === 'approved').map((r) => r.user_id));
+  const eligible = data.profiles
+    .filter((m) => m.is_active && m.role === 'member' && !approved.some((a) => a.user_id === m.id))
+    .sort((a, b) => Number(inProject.has(b.id)) - Number(inProject.has(a.id)));
   const askDelete = () => confirmAction({ title: 'حذف تسک؟', description: `تسک «${task.title}» و تمام درخواست‌ها و تخصیص‌های مرتبط با آن برای همیشه حذف می‌شوند.`, confirmLabel: 'حذف تسک', onConfirm: () => deleteTask(task.id) });
 
   return <article className={`nv-task ${movable ? 'is-movable' : ''} ${task.status === 'done' ? 'is-done' : ''} nv-rise`} style={{ '--dept-color': dept.color, '--i': Math.min(index, 8) }}
@@ -115,7 +120,7 @@ function TaskCard({ task, index = 0, movable, showStatus, profile, data, openDia
         return <span className="nv-person" key={row.id}><Avatar profile={member || { full_name: 'عضو', department: project.department }} size="tiny" />{member?.full_name || 'عضو تسک'}
           <button title="حذف از تسک" aria-label="حذف عضو از تسک" onClick={() => confirmAction({ title: 'حذف عضو از تسک؟', icon: UserMinus, description: `دسترسی این فرد به تسک «${task.title}» لغو می‌شود.`, confirmLabel: 'حذف تخصیص', onConfirm: () => removeTaskMember(task.id, row.user_id) })}><UserMinus size={13} /></button></span>;
       })}</div> : <p className="nv-muted-text">هنوز عضوی تخصیص داده نشده است.</p>}
-      <div className="nv-assign"><select className="nv-select is-small" value={memberToAdd} onChange={(e) => setMemberToAdd(e.target.value)} aria-label="انتخاب عضو پروژه"><option value="">انتخاب عضو پروژه…</option>{eligible.map((m) => <option key={m.id} value={m.id}>{m.full_name}</option>)}</select>
+      <div className="nv-assign"><select className="nv-select is-small" value={memberToAdd} onChange={(e) => setMemberToAdd(e.target.value)} aria-label="انتخاب عضو برای تسک"><option value="">{eligible.length ? 'انتخاب عضو…' : 'عضو فعالی برای تخصیص وجود ندارد'}</option>{eligible.map((m) => <option key={m.id} value={m.id}>{m.full_name}{inProject.has(m.id) ? '' : ' · (به پروژه هم اضافه می‌شود)'}</option>)}</select>
         <button className="button button-primary button-small" disabled={!memberToAdd} onClick={async () => { if (await assignTaskMember(task.id, memberToAdd)) setMemberToAdd(''); }}><UserPlus size={14} /> تخصیص</button></div>
     </div>}
   </article>;

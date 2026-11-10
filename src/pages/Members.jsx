@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
-import { Ban, Crown, Layers3, RotateCcw, Search, ShieldCheck, UserMinus, Users } from 'lucide-react';
+import { Ban, Crown, Layers3, RotateCcw, Search, ShieldCheck, Trash2, UserMinus, Users } from 'lucide-react';
 import { DEPARTMENTS, ROLE_LABELS, faDate, getDepartment, toFaDigits } from '../lib/helpers';
 import { useDebouncedValue } from '../lib/hooks';
 import { Avatar, EmptyState, PageHeader, StatCard } from '../components/ui';
 
-export default function MembersPage({ profile, data, confirmAction, assignAdmin, revokeAdmin, deactivateMember, reactivateMember, changeMemberDepartment }) {
+export default function MembersPage({ profile, data, confirmAction, assignAdmin, revokeAdmin, deactivateMember, reactivateMember, deleteMemberPermanently, changeMemberDepartment }) {
   const superAdmin = profile.role === 'super_admin';
   const [tab, setTab] = useState('active');
   const [departmentFilter, setDepartmentFilter] = useState(profile.role === 'department_admin' ? profile.department : 'all');
@@ -74,6 +74,7 @@ export default function MembersPage({ profile, data, confirmAction, assignAdmin,
               {tab === 'active' && superAdmin && m.role === 'department_admin' && <button className="button button-outline button-small" onClick={() => confirmAction({ title: 'عزل مدیر بخش؟', icon: Ban, description: `دسترسی مدیریتی ${m.full_name} برداشته می‌شود و او دوباره عضو عادی خواهد بود.`, confirmLabel: 'عزل مدیر', onConfirm: () => revokeAdmin(m.id, m.department) })}><Ban size={14} /> عزل مدیر</button>}
               {tab === 'active' && canManage && <button className="button button-danger-ghost button-small" onClick={() => confirmAction({ title: 'حذف عضو از فهرست فعال؟', icon: UserMinus, description: `${m.full_name} دیگر به فضای کاری نَوِرا دسترسی نخواهد داشت. سوابق و فعالیت‌های او برای حفظ تاریخچه باقی می‌مانند.`, confirmLabel: 'حذف دسترسی', onConfirm: () => deactivateMember(m.id) })}><UserMinus size={14} /> حذف دسترسی</button>}
               {tab === 'inactive' && <button className="button button-outline button-small" onClick={() => confirmAction({ title: 'بازگرداندن دسترسی؟', icon: RotateCcw, tone: 'safe', description: `${m.full_name} دوباره به فضای کاری دسترسی پیدا می‌کند.`, confirmLabel: 'بازگردانی', onConfirm: () => reactivateMember(m.id) })}><RotateCcw size={14} /> بازگردانی</button>}
+              {tab === 'inactive' && superAdmin && <button className="button button-danger-ghost button-small" onClick={() => confirmAction({ title: 'حذف دائمی عضو؟', icon: Trash2, description: `حساب ${m.full_name} برای همیشه از سیستم پاک می‌شود و شماره‌اش آزاد می‌شود تا بتواند دوباره ثبت‌نام کند. پروژه‌ها، تسک‌ها و رویدادهایی که او ساخته به نام تو منتقل می‌شوند؛ گزارش‌های محرمانه‌ای که خودش ثبت کرده حذف می‌شوند. این کار قابل بازگشت نیست.`, confirmLabel: 'حذف دائمی', onConfirm: () => deleteMemberPermanently(m.id) })}><Trash2 size={14} /> حذف دائمی</button>}
               {!canManage && !(tab === 'active' && superAdmin && m.role === 'department_admin') && tab === 'active' && <span className="nv-muted">—</span>}
             </div>
           </div>;
