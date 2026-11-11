@@ -80,6 +80,11 @@ export function AuthModal({ mode, setMode, close, notify }) {
       }
       if (result.error) return notify(explainAuthError(result.error), 'error');
       if (isSignup && !result.data.session) {
+        // Confirm-email may still be ON in Supabase; the database auto-confirms the alias address, so just sign in.
+        const retry = await supabase.auth.signInWithPassword({ email: authEmail, password: form.password });
+        if (!retry.error && retry.data.session) result = retry;
+      }
+      if (isSignup && !result.data.session) {
         notify('حساب ایجاد شد، اما ورود فوری فعال نیست. در Supabase بخش Authentication → Sign In / Providers → Email، گزینه Confirm email را خاموش کن.', 'error');
         return;
       }

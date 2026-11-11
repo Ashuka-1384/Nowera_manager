@@ -70,7 +70,7 @@ if (!url || !key) {
   console.error('✗ متغیرهای اتصال پیدا نشدند. دستور npm run setup را اجرا کن.');
   process.exit(1);
 }
-if (!/^https:\/\/[a-zA-Z0-9.-]+\.supabase\.co$/.test(url)) {
+if (!/^https:\/\/[a-zA-Z0-9.-]+(:\d+)?$/.test(url)) {
   console.error('✗ VITE_SUPABASE_URL معتبر نیست:', url);
   process.exit(1);
 }

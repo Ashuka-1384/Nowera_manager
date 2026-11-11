@@ -33,7 +33,7 @@ try {
   console.log('کلید service_role یا secret را وارد نکن؛ این کلید برای اتصال مرورگر نیست.\n');
 
   const url = clean(await ask('Project URL (مثل https://xxxx.supabase.co): '));
-  if (!/^https:\/\/[a-zA-Z0-9.-]+\.supabase\.co$/.test(url)) {
+  if (!/^https:\/\/[a-zA-Z0-9.-]+(:\d+)?$/.test(url)) {
     throw new Error('آدرس پروژه معتبر نیست. باید شبیه https://xxxx.supabase.co باشد.');
   }
 

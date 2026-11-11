@@ -1,6 +1,7 @@
 import { createClient } from '@supabase/supabase-js';
 
-const url = (import.meta.env.VITE_SUPABASE_URL || '').trim();
+// Trailing slashes / quotes pasted from the dashboard or Vercel are removed so they cannot break the URL check.
+const url = (import.meta.env.VITE_SUPABASE_URL || '').trim().replace(/^['"]|['"]$/g, '').replace(/\/+$/, '');
 function isSecretKey(key) {
   if (/sb_secret_|service_role/i.test(key)) return true;
   const payload = key.split('.')[1];
@@ -17,10 +18,10 @@ const publicKey = (
   import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY ||
   import.meta.env.VITE_SUPABASE_ANON_KEY ||
   ''
-).trim();
+).trim().replace(/^['"]|['"]$/g, '');
 
 export const isSupabaseConfigured = Boolean(
-  /^https:\/\/[a-zA-Z0-9.-]+\.supabase\.co$/.test(url) &&
+  /^https:\/\/[a-zA-Z0-9.-]+(:\d+)?$/.test(url) &&
   !url.includes('YOUR_PROJECT_ID') &&
   publicKey &&
   !/YOUR_PROJECT_ID|YOUR_SUPABASE/i.test(publicKey) &&

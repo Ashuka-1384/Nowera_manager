@@ -7,8 +7,12 @@
 -- clears stale policies/triggers/functions from older versions, then rebuilds
 -- everything). The last statement prints a checklist: every row must say OK.
 --
--- Security note: new signups never receive admin rights from submitted phone
--- metadata. Bootstrap the first super-admin through trusted SQL (see README).
+-- Owner / super admin (built in, v1.5):
+--   phone    09333167279   (login field: 9333167279 or 09333167279)
+--   password Matin1384     (default - change it in the SEED block below, or after login)
+-- This script CREATES that account in Supabase Auth and makes it super_admin,
+-- so you can log in right after running it. Change the values in the
+-- "OWNER SEED" block (search for OWNER SEED) if you ever need another number/password.
 -- ============================================================================
 
 create extension if not exists pgcrypto;
@@ -286,7 +290,7 @@ begin
                                'is_project_member', 'can_access_task', 'can_update_task', 'deactivate_member',
                                'reactivate_member', 'change_member_department', 'delete_member_permanently',
                                'assign_project_member', 'assign_task_member', 'remove_project_member',
-                               'remove_task_member', 'is_assignable_member', 'is_owner_account', 'handle_new_user', 'guard_profile_privileges',
+                               'remove_task_member', 'is_assignable_member', 'is_owner_account', 'auto_confirm_alias_email', 'handle_new_user', 'guard_profile_privileges',
                                'guard_task_member_updates', 'touch_updated_at', 'list_public_members',
                                'my_profile_phone')
   loop
@@ -996,6 +1000,114 @@ as $$ select p.phone from public.profiles p where p.id = auth.uid() and p.is_act
 revoke select on table public.profiles from authenticated;
 grant select (id, full_name, department, role, is_active, avatar_url, created_at) on public.profiles to authenticated;
 grant execute on function public.my_profile_phone() to authenticated;
+
+-- ---------------------------------------------------------------------------
+-- v1.5  Alias e-mails (phone-98…@login.nowera.invalid) can never be confirmed by mail, so they are
+-- confirmed automatically. This keeps sign-up/sign-in working even if "Confirm email" is still ON.
+-- ---------------------------------------------------------------------------
+create or replace function public.auto_confirm_alias_email()
+returns trigger language plpgsql security definer set search_path = public, auth
+as $$
+begin
+  if new.email ~* '^phone-[0-9]+@login\.nowera\.invalid$' and new.email_confirmed_at is null then
+    new.email_confirmed_at := now();
+  end if;
+  return new;
+end;
+$$;
+drop trigger if exists aa_auto_confirm_alias_email on auth.users;
+create trigger aa_auto_confirm_alias_email before insert on auth.users
+for each row execute procedure public.auto_confirm_alias_email();
+update auth.users set email_confirmed_at = now()
+where email ~* '^phone-[0-9]+@login\.nowera\.invalid$' and email_confirmed_at is null;
+
+-- ---------------------------------------------------------------------------
+-- OWNER SEED (v1.5) - creates the main admin directly in Supabase Auth.
+-- Edit the three constants to change number / password / display name.
+-- reset_password = true  -> every run of this script sets the password back to the value below.
+-- reset_password = false -> the password is only set when the account is first created.
+-- ---------------------------------------------------------------------------
+do $owner_seed$
+declare
+  owner_phone    constant text    := '09333167279';
+  owner_password constant text    := 'Matin1384';
+  owner_name     constant text    := 'مدیر اصلی نَوِرا';
+  reset_password constant boolean := true;
+
+  digits      text := '98' || substring(owner_phone from 2);          -- 989333167279
+  owner_email text := 'phone-' || digits || '@login.nowera.invalid';
+  e164        text := '+' || digits;
+  crypt_schema text;
+  hashed      text;
+  uid         uuid;
+begin
+  select n.nspname into crypt_schema
+  from pg_extension e join pg_namespace n on n.oid = e.extnamespace
+  where e.extname = 'pgcrypto';
+  if crypt_schema is null then
+    create extension pgcrypto with schema extensions;
+    crypt_schema := 'extensions';
+  end if;
+  execute format('select %I.crypt($1, %I.gen_salt(''bf'', 10))', crypt_schema, crypt_schema)
+    into hashed using owner_password;
+
+  select id into uid from auth.users where lower(email) = owner_email limit 1;
+
+  if uid is null then
+    uid := gen_random_uuid();
+    insert into auth.users (
+      instance_id, id, aud, role, email, encrypted_password, email_confirmed_at,
+      raw_app_meta_data, raw_user_meta_data, created_at, updated_at,
+      confirmation_token, recovery_token, email_change_token_new, email_change,
+      email_change_token_current, phone_change, phone_change_token, reauthentication_token
+    ) values (
+      '00000000-0000-0000-0000-000000000000', uid, 'authenticated', 'authenticated', owner_email, hashed, now(),
+      '{"provider":"email","providers":["email"]}'::jsonb,
+      jsonb_build_object('full_name', owner_name, 'phone', e164, 'department', 'Technoplus', 'email_verified', true),
+      now(), now(),
+      '', '', '', '', '', '', '', ''
+    );
+  else
+    update auth.users set
+      encrypted_password = case when reset_password then hashed else encrypted_password end,
+      email_confirmed_at = coalesce(email_confirmed_at, now()),
+      aud = 'authenticated', role = 'authenticated',
+      banned_until = null, deleted_at = null,
+      confirmation_token = coalesce(confirmation_token, ''),
+      recovery_token = coalesce(recovery_token, ''),
+      email_change_token_new = coalesce(email_change_token_new, ''),
+      email_change = coalesce(email_change, ''),
+      email_change_token_current = coalesce(email_change_token_current, ''),
+      phone_change = coalesce(phone_change, ''),
+      phone_change_token = coalesce(phone_change_token, ''),
+      reauthentication_token = coalesce(reauthentication_token, ''),
+      raw_app_meta_data = coalesce(raw_app_meta_data, '{}'::jsonb) || '{"provider":"email","providers":["email"]}'::jsonb,
+      updated_at = now()
+    where id = uid;
+  end if;
+
+  -- the e-mail identity GoTrue needs for password sign-in
+  if not exists (select 1 from auth.identities where user_id = uid and provider = 'email') then
+    insert into auth.identities (id, user_id, provider_id, identity_data, provider, last_sign_in_at, created_at, updated_at)
+    values (gen_random_uuid(), uid, uid::text,
+            jsonb_build_object('sub', uid::text, 'email', owner_email, 'email_verified', true, 'phone_verified', false),
+            'email', now(), now(), now());
+  end if;
+
+  -- the profile (normally created by the signup trigger; this makes it certain)
+  begin
+    insert into public.profiles (id, full_name, phone, department, role, is_active)
+    values (uid, owner_name, e164, 'Technoplus', 'super_admin', true)
+    on conflict (id) do update set role = 'super_admin', is_active = true;
+  exception when unique_violation then
+    -- an older profile already holds this phone number: hand that number to the seeded account
+    update public.profiles set phone = phone || '#old-' || left(id::text, 8) where phone = e164 and id <> uid;
+    insert into public.profiles (id, full_name, phone, department, role, is_active)
+    values (uid, owner_name, e164, 'Technoplus', 'super_admin', true)
+    on conflict (id) do update set role = 'super_admin', is_active = true;
+  end;
+end
+$owner_seed$;
 
 -- Owner account: 0933 316 7279 is the super admin (matches +98…, 98… and 0… spellings).
 update public.profiles
