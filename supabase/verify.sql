@@ -40,8 +40,7 @@ with checks(area, item, ok) as (
          exists (select 1 from public.profiles where role = 'super_admin' and is_active)
   union all
   select 'data', 'owner phone 09333167279 is super admin',
-         exists (select 1 from public.profiles where role = 'super_admin' and is_active
-                 and regexp_replace(coalesce(phone, ''), '\D', '', 'g') ~ '9333167279$')
+         exists (select 1 from public.profiles where role = 'super_admin' and is_active and public.is_owner_account(id))
   union all
   select 'data', 'every NOWERA auth user has a profile',
          not exists (select 1 from auth.users u left join public.profiles p on p.id = u.id

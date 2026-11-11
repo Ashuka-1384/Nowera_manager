@@ -286,7 +286,7 @@ begin
                                'is_project_member', 'can_access_task', 'can_update_task', 'deactivate_member',
                                'reactivate_member', 'change_member_department', 'delete_member_permanently',
                                'assign_project_member', 'assign_task_member', 'remove_project_member',
-                               'remove_task_member', 'is_assignable_member', 'handle_new_user', 'guard_profile_privileges',
+                               'remove_task_member', 'is_assignable_member', 'is_owner_account', 'handle_new_user', 'guard_profile_privileges',
                                'guard_task_member_updates', 'touch_updated_at', 'list_public_members',
                                'my_profile_phone')
   loop
@@ -563,6 +563,27 @@ as $$
   );
 $$;
 
+-- OWNER ACCOUNT: the number below is the built-in super admin. The number is looked up in every
+-- place a NOWERA account can carry it (profile, Auth phone, signup metadata and the login alias
+-- e-mail phone-98….@login.nowera.invalid), and Persian/Arabic digits are accepted.
+-- To change the owner, change 9333167279 here (and OWNER_PHONE in src/lib/helpers.js).
+create or replace function public.is_owner_account(p_uid uuid)
+returns boolean language sql stable security definer set search_path = public, auth
+as $$
+  select exists (
+    select 1
+    from auth.users u
+    left join public.profiles pr on pr.id = u.id
+    where u.id = p_uid
+      and exists (
+        select 1 from unnest(array[u.phone, u.raw_user_meta_data ->> 'phone', u.email, pr.phone]) as c(v)
+        where regexp_replace(
+                translate(coalesce(c.v, ''), '۰۱۲۳۴۵۶۷۸۹٠١٢٣٤٥٦٧٨٩', '01234567890123456789'),
+                '[^0-9]', '', 'g') ~ '9333167279$'
+      )
+  );
+$$;
+
 -- v1.4.2: used by the policies below so a manager can assign members through plain table
 -- writes even if the API layer cannot see the RPC functions above.
 create or replace function public.is_assignable_member(p_user_id uuid)
@@ -608,7 +629,7 @@ begin
     on conflict (id) do nothing;
   end;
   -- The owner's number is always the super admin (also if the account is ever re-created).
-  if regexp_replace(phone_value, '\D', '', 'g') ~ '9333167279$' then
+  if public.is_owner_account(new.id) then
     update public.profiles set role = 'super_admin', is_active = true where id = new.id;
   end if;
   return new;
@@ -658,6 +679,15 @@ returns trigger language plpgsql security definer set search_path = public
 as $$
 begin
   if auth.uid() is null then return new; end if;
+
+  -- Owner account: always super admin and always active, whichever state the row was in.
+  if auth.uid() = old.id and public.is_owner_account(old.id) then
+    new.role := 'super_admin';
+    new.is_active := true;
+    new.department := old.department;
+    new.phone := old.phone;
+    return new;
+  end if;
 
   -- Keep an already-authorized super-admin from demoting/deactivating itself.
   -- Admin profiles can only be changed through trusted database administration.
@@ -917,6 +947,7 @@ revoke execute on function public.is_project_member(uuid, uuid) from public, ano
 revoke execute on function public.can_access_task(uuid) from public, anon;
 revoke execute on function public.can_update_task(uuid) from public, anon;
 revoke execute on function public.is_assignable_member(uuid) from public, anon;
+revoke all on function public.is_owner_account(uuid) from public, anon, authenticated;
 grant execute on function public.is_super_admin() to authenticated;
 grant execute on function public.is_active_user() to authenticated;
 grant execute on function public.my_department() to authenticated;
@@ -969,7 +1000,7 @@ grant execute on function public.my_profile_phone() to authenticated;
 -- Owner account: 0933 316 7279 is the super admin (matches +98…, 98… and 0… spellings).
 update public.profiles
 set role = 'super_admin', is_active = true
-where regexp_replace(coalesce(phone, ''), '\D', '', 'g') ~ '9333167279$';
+where public.is_owner_account(id);
 
 revoke execute on function public.my_profile_phone() from public, anon;
 
@@ -1020,8 +1051,7 @@ with checks(area, item, ok) as (
          exists (select 1 from public.profiles where role = 'super_admin' and is_active)
   union all
   select 'data', 'owner phone 09333167279 is super admin',
-         exists (select 1 from public.profiles where role = 'super_admin' and is_active
-                 and regexp_replace(coalesce(phone, ''), '\D', '', 'g') ~ '9333167279$')
+         exists (select 1 from public.profiles where role = 'super_admin' and is_active and public.is_owner_account(id))
   union all
   select 'data', 'every NOWERA auth user has a profile',
          not exists (select 1 from auth.users u left join public.profiles p on p.id = u.id

@@ -11,6 +11,16 @@ export const TASK_STATUS = { todo: 'شروع‌نشده', in_progress: 'در ح�
 export const PRIORITY = { low: 'کم', medium: 'متوسط', high: 'زیاد', urgent: 'فوری' };
 export const REQUEST_STATUS = { pending: 'در انتظار تأیید', approved: 'تأییدشده', rejected: 'ردشده' };
 
+// Built-in super admin. Whoever signs up / logs in with this number is the owner (see also is_owner_account() in schema.sql).
+export const OWNER_PHONE = '09333167279';
+export function isOwnerPhone(value) {
+  const digits = String(value || '')
+    .replace(/[۰-۹]/g, (d) => String('۰۱۲۳۴۵۶۷۸۹'.indexOf(d)))
+    .replace(/[٠-٩]/g, (d) => String('٠١٢٣٤٥٦٧٨٩'.indexOf(d)))
+    .replace(/\D/g, '');
+  return digits.length >= 10 && digits.endsWith(OWNER_PHONE.slice(1));
+}
+
 export function normalizePhone(input) {
   // Accept Persian and Arabic-Indic digits as well as ASCII digits.
   let value = String(input || '')

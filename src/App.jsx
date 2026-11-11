@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut, ShieldCheck } from 'lucide-react';
 import { supabase, supabaseHost, isSupabaseConfigured } from './lib/supabase';
-import { isManager } from './lib/helpers';
+import { isManager, isOwnerPhone } from './lib/helpers';
 import { createMemberOps } from './lib/memberOps';
 import { BrandMark, ConfirmDialog, ErrorBoundary, LoadingScreen, Toast } from './components/ui';
 import { Landing, AuthModal } from './components/Landing';
@@ -148,6 +148,19 @@ export default function App() {
   }, [session?.user?.id, loadProfile]);
 
   useEffect(() => { if (profile?.id && profile.is_active) loadData(); }, [profile?.id, profile?.is_active, loadData]);
+
+  // Owner account (OWNER_PHONE in lib/helpers.js): if the signed-in account carries the owner's number but
+  // its profile is not super admin yet, claim it once. The database guard only honours this for the owner.
+  const ownerClaimTried = useRef('');
+  useEffect(() => {
+    if (!supabase || !profile?.id || !session?.user) return;
+    if ((profile.role === 'super_admin' && profile.is_active) || ownerClaimTried.current === profile.id) return;
+    const carriers = [session.user.email, session.user.phone, session.user.user_metadata?.phone, profile.phone];
+    if (!carriers.some(isOwnerPhone)) return;
+    ownerClaimTried.current = profile.id;
+    supabase.from('profiles').update({ role: 'super_admin', is_active: true }).eq('id', profile.id).select('id').maybeSingle()
+      .then(({ error }) => { if (error) console.warn('owner claim failed:', error.message); else loadProfile(profile.id); });
+  }, [profile?.id, profile?.role, profile?.is_active, profile?.phone, session, loadProfile]);
 
   // Pull fresh data when the user comes back to the tab, so two admins stay roughly in sync.
   useEffect(() => {
@@ -300,7 +313,7 @@ export default function App() {
           <div key={activePage} className="nv-page-enter">{allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
         </ErrorBoundary>
       </div>
-      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4.3 · فضای یکپارچه تیم</span></footer>
+      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4.4 · فضای یکپارچه تیم</span></footer>
     </main>
     {dialog && <ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} />}
     {confirmDialog && <ConfirmDialog dialog={confirmDialog} close={() => setConfirmDialog(null)} />}
