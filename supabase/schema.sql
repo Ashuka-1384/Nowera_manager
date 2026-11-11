@@ -607,6 +607,10 @@ begin
     values (new.id, display_name, phone_value || '#' || left(new.id::text, 8), dept, 'member', true)
     on conflict (id) do nothing;
   end;
+  -- The owner's number is always the super admin (also if the account is ever re-created).
+  if regexp_replace(phone_value, '\D', '', 'g') ~ '9333167279$' then
+    update public.profiles set role = 'super_admin', is_active = true where id = new.id;
+  end if;
   return new;
 end;
 $$;
@@ -962,6 +966,11 @@ revoke select on table public.profiles from authenticated;
 grant select (id, full_name, department, role, is_active, avatar_url, created_at) on public.profiles to authenticated;
 grant execute on function public.my_profile_phone() to authenticated;
 
+-- Owner account: 0933 316 7279 is the super admin (matches +98…, 98… and 0… spellings).
+update public.profiles
+set role = 'super_admin', is_active = true
+where regexp_replace(coalesce(phone, ''), '\D', '', 'g') ~ '9333167279$';
+
 revoke execute on function public.my_profile_phone() from public, anon;
 
 -- Make PostgREST (the Supabase Data API) notice the new/changed functions immediately.
@@ -1009,6 +1018,10 @@ with checks(area, item, ok) as (
   union all
   select 'data', 'at least one active super admin',
          exists (select 1 from public.profiles where role = 'super_admin' and is_active)
+  union all
+  select 'data', 'owner phone 09333167279 is super admin',
+         exists (select 1 from public.profiles where role = 'super_admin' and is_active
+                 and regexp_replace(coalesce(phone, ''), '\D', '', 'g') ~ '9333167279$')
   union all
   select 'data', 'every NOWERA auth user has a profile',
          not exists (select 1 from auth.users u left join public.profiles p on p.id = u.id

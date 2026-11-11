@@ -300,7 +300,7 @@ export default function App() {
           <div key={activePage} className="nv-page-enter">{allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
         </ErrorBoundary>
       </div>
-      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4.2 · فضای یکپارچه تیم</span></footer>
+      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.4.3 · فضای یکپارچه تیم</span></footer>
     </main>
     {dialog && <ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} />}
     {confirmDialog && <ConfirmDialog dialog={confirmDialog} close={() => setConfirmDialog(null)} />}
