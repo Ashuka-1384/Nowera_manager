@@ -1,7 +1,6 @@
-/* NOWERA service worker — v1
- * Only same-origin GET requests are handled. Supabase (cross-origin) and /api/* are never cached,
- * so login sessions and live data are always fresh. */
-const VERSION = 'nowera-v1';
+/* NOWERA service worker — v2 (Web Push اضافه شد)
+ * Only same-origin GET requests are cached. Supabase (cross-origin) and /api/* are never cached. */
+const VERSION = 'nowera-v2';
 const SHELL_CACHE = `${VERSION}-shell`;
 const ASSET_CACHE = `${VERSION}-assets`;
 const SHELL_URLS = ['/', '/manifest.webmanifest', '/icons/icon-192.png', '/icons/icon-512.png'];
@@ -20,20 +19,62 @@ self.addEventListener('activate', (event) => {
   );
 });
 
-// The page asks the waiting worker to take over (see src/lib/pwa.js).
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+// ───── Web Push ─────
+self.addEventListener('push', (event) => {
+  let data = {};
+  try { data = event.data ? event.data.json() : {}; } catch (e) { data = { body: event.data ? event.data.text() : '' }; }
+  event.waitUntil(
+    self.registration.showNotification(data.title || 'NOWERA', {
+      body: data.body || '',
+      icon: '/icons/icon-192.png',
+      badge: '/icons/favicon-48.png',
+      tag: data.tag || undefined,
+      renotify: Boolean(data.tag),
+      data: { url: data.url || '/' },
+      dir: 'rtl',
+      lang: 'fa',
+    }),
+  );
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const target = new URL((event.notification.data && event.notification.data.url) || '/', self.location.origin).href;
+  event.waitUntil(
+    self.clients.matchAll({ type: 'window', includeUncontrolled: true }).then(async (list) => {
+      for (const c of list) {
+        if (new URL(c.url).origin === self.location.origin) {
+          await c.focus();
+          if ('navigate' in c) { try { await c.navigate(target); } catch (e) {} }
+          return;
+        }
+      }
+      return self.clients.openWindow(target);
+    }),
+  );
+});
+
+// اگر مرورگر اشتراک را تازه کرد، صفحه را خبر کن تا دوباره ثبت کند
+self.addEventListener('pushsubscriptionchange', (event) => {
+  event.waitUntil(
+    self.clients.matchAll({ includeUncontrolled: true }).then((list) =>
+      list.forEach((c) => c.postMessage({ type: 'PUSH_RESUBSCRIBE' })),
+    ),
+  );
 });
 
 self.addEventListener('fetch', (event) => {
   const req = event.request;
   if (req.method !== 'GET') return;
   const url = new URL(req.url);
-  if (url.origin !== self.location.origin) return;       // Supabase, Google Fonts, ...
-  if (url.pathname.startsWith('/api/')) return;           // serverless functions
+  if (url.origin !== self.location.origin) return;
+  if (url.pathname.startsWith('/api/')) return;
   if (url.pathname === '/sw.js') return;
 
-  // Page navigations: network first, fall back to the cached app shell when offline.
   if (req.mode === 'navigate') {
     event.respondWith(
       fetch(req)
@@ -47,7 +88,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Hashed build files are immutable: cache first.
   if (url.pathname.startsWith('/assets/')) {
     event.respondWith(
       caches.match(req).then(
@@ -65,7 +105,6 @@ self.addEventListener('fetch', (event) => {
     return;
   }
 
-  // Icons, brand images, manifest: stale-while-revalidate.
   event.respondWith(
     caches.open(ASSET_CACHE).then(async (cache) => {
       const hit = await cache.match(req);
