@@ -1,24 +1,40 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { Suspense, lazy, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { LogOut, ShieldCheck } from 'lucide-react';
 import { supabase, supabaseHost, isSupabaseConfigured } from './lib/supabase';
 import { isManager, isOwnerPhone } from './lib/helpers';
 import { createMemberOps } from './lib/memberOps';
-import { BrandMark, ConfirmDialog, ErrorBoundary, LoadingScreen, Toast } from './components/ui';
-import { Landing, AuthModal } from './components/Landing';
-import { Sidebar, Topbar } from './components/Shell';
-import ActionDialog from './components/Dialogs';
-import OverviewPage from './pages/Overview';
-import ProjectsPage from './pages/Projects';
-import TasksPage from './pages/Tasks';
-import CalendarPage from './pages/Calendar';
-import TeamsPage from './pages/Teams';
-import ReportsPage from './pages/Reports';
-import MembersPage from './pages/Members';
-import SettingsPage from './pages/Settings';
+import { BrandMark, ConfirmDialog, ErrorBoundary, LoadingScreen, PageSkeleton, PullToRefresh, Toast } from './components/ui';
+import { BottomNav, Sidebar, Topbar } from './components/Shell';
+
+// Every screen is its own chunk: the first paint only downloads what the current screen needs.
+const Landing = lazy(() => import('./components/Landing').then((m) => ({ default: m.Landing })));
+const AuthModal = lazy(() => import('./components/Landing').then((m) => ({ default: m.AuthModal })));
+const ActionDialog = lazy(() => import('./components/Dialogs'));
+const OverviewPage = lazy(() => import('./pages/Overview'));
+const ProjectsPage = lazy(() => import('./pages/Projects'));
+const TasksPage = lazy(() => import('./pages/Tasks'));
+const CalendarPage = lazy(() => import('./pages/Calendar'));
+const TeamsPage = lazy(() => import('./pages/Teams'));
+const ReportsPage = lazy(() => import('./pages/Reports'));
+const MembersPage = lazy(() => import('./pages/Members'));
+const SettingsPage = lazy(() => import('./pages/Settings'));
+const PAGE_COMPONENTS = { overview: OverviewPage, projects: ProjectsPage, tasks: TasksPage, calendar: CalendarPage, teams: TeamsPage, reports: ReportsPage, members: MembersPage, settings: SettingsPage };
 
 const EMPTY_DATA = { profiles: [], publicMembers: [], projects: [], tasks: [], events: [], reports: [], projectMembers: [], taskMembers: [] };
 const PAGES = ['overview', 'projects', 'tasks', 'calendar', 'teams', 'reports', 'members', 'settings'];
 const STALE_AFTER_MS = 45000;
+// One query per table so a mutation only re-downloads the tables it actually touched.
+const QUERIES = {
+  profiles: () => supabase.from('profiles').select('id,full_name,department,role,is_active,avatar_url,created_at').order('created_at', { ascending: false }),
+  projects: () => supabase.from('projects').select('*').order('created_at', { ascending: false }),
+  tasks: () => supabase.from('tasks').select('*').order('created_at', { ascending: false }),
+  events: () => supabase.from('events').select('*').order('event_date', { ascending: true }),
+  reports: () => supabase.from('reports').select('*').order('created_at', { ascending: false }),
+  projectMembers: () => supabase.from('project_members').select('*').order('requested_at', { ascending: false }),
+  taskMembers: () => supabase.from('task_members').select('*').order('requested_at', { ascending: false }),
+  publicMembers: () => supabase.rpc('list_public_members'),
+};
+const ALL_KEYS = Object.keys(QUERIES);
 const DATA_LABELS = { profiles: 'اعضا', projects: 'پروژه‌ها', tasks: 'تسک‌ها', events: 'رویدادها', reports: 'گزارش‌ها', projectMembers: 'عضویت پروژه‌ها', taskMembers: 'عضویت تسک‌ها', publicMembers: 'فهرست عمومی اعضا' };
 const pageFromHash = () => { const id = window.location.hash.replace('#', ''); return PAGES.includes(id) ? id : 'overview'; };
 
@@ -30,6 +46,7 @@ export default function App() {
   const [profileError, setProfileError] = useState('');
   const [data, setData] = useState(EMPTY_DATA);
   const [dataLoading, setDataLoading] = useState(false);
+  const [dataReady, setDataReady] = useState(false);
   const [dataIssues, setDataIssues] = useState([]);
   const [landingMembers, setLandingMembers] = useState([]);
   const [activePage, setActivePageState] = useState(pageFromHash);
@@ -99,39 +116,32 @@ export default function App() {
     }
   }, []);
 
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (keys = ALL_KEYS) => {
     if (!supabase || !session?.user?.id || !profile?.is_active) return;
+    const wanted = keys.filter((key) => QUERIES[key]);
+    if (!wanted.length) return;
     setDataLoading(true);
     try {
-      const results = await Promise.all([
-        supabase.from('profiles').select('id,full_name,department,role,is_active,avatar_url,created_at').order('created_at', { ascending: false }),
-        supabase.from('projects').select('*').order('created_at', { ascending: false }),
-        supabase.from('tasks').select('*').order('created_at', { ascending: false }),
-        supabase.from('events').select('*').order('event_date', { ascending: true }),
-        supabase.from('reports').select('*').order('created_at', { ascending: false }),
-        supabase.from('project_members').select('*').order('requested_at', { ascending: false }),
-        supabase.from('task_members').select('*').order('requested_at', { ascending: false }),
-        supabase.rpc('list_public_members'),
-      ]);
-      const keys = ['profiles', 'projects', 'tasks', 'events', 'reports', 'projectMembers', 'taskMembers', 'publicMembers'];
+      const results = await Promise.all(wanted.map((key) => QUERIES[key]()));
       // Keep the previous rows for any query that failed instead of silently emptying that section,
       // and REPORT the failure: an empty member picker with no explanation looks exactly like "adding members is broken".
       const issues = results
-        .map((result, index) => (result.error ? { key: keys[index], label: DATA_LABELS[keys[index]] || keys[index], message: result.error.message || '', code: result.error.code || '' } : null))
+        .map((result, index) => (result.error ? { key: wanted[index], label: DATA_LABELS[wanted[index]] || wanted[index], message: result.error.message || '', code: result.error.code || '' } : null))
         .filter(Boolean);
       issues.forEach((issue) => console.warn(`${issue.key} query failed:`, issue.code, issue.message));
       setData((previous) => {
         const next = { ...previous };
-        results.forEach((result, index) => { if (!result.error && Array.isArray(result.data)) next[keys[index]] = result.data; });
+        results.forEach((result, index) => { if (!result.error && Array.isArray(result.data)) next[wanted[index]] = result.data; });
         return next;
       });
-      setDataIssues(issues);
-      lastLoadedAt.current = Date.now();
+      setDataIssues((previous) => [...previous.filter((issue) => !wanted.includes(issue.key)), ...issues]);
+      if (wanted.length === ALL_KEYS.length) lastLoadedAt.current = Date.now();
     } catch (error) {
       console.error('Could not load NOWERA data:', error);
       notify('دریافت داده‌ها از Supabase ناموفق بود. اتصال را بررسی و دوباره تلاش کن.', 'error');
     } finally {
       setDataLoading(false);
+      setDataReady(true);
     }
   }, [session?.user?.id, profile?.id, profile?.is_active, notify]);
 
@@ -144,7 +154,7 @@ export default function App() {
 
   useEffect(() => {
     if (session?.user?.id) loadProfile(session.user.id);
-    else { setProfile(null); setProfileError(''); setData(EMPTY_DATA); setDataIssues([]); }
+    else { setProfile(null); setProfileError(''); setData(EMPTY_DATA); setDataIssues([]); setDataReady(false); }
   }, [session?.user?.id, loadProfile]);
 
   useEffect(() => { if (profile?.id && profile.is_active) loadData(); }, [profile?.id, profile?.is_active, loadData]);
@@ -178,34 +188,35 @@ export default function App() {
       else if (error) console.warn('Public member directory is unavailable:', error.message);
     } catch (error) { console.warn('Could not connect to Supabase for the public member directory:', error); }
   }, []);
-  useEffect(() => { loadLandingMembers(); }, [loadLandingMembers]);
+  useEffect(() => { if (!authLoading && !session) loadLandingMembers(); }, [loadLandingMembers, authLoading, session]);
 
   const signOut = async () => {
     if (supabase) await supabase.auth.signOut();
     setSession(null); setProfile(null); setData(EMPTY_DATA); setActivePage('overview');
     notify('با موفقیت خارج شدید.');
   };
-  const refresh = useCallback(async () => { await loadData(); }, [loadData]);
+  // `refresh()` reloads everything; `refresh(['tasks'])` reloads only those tables.
+  const refresh = useCallback(async (keys) => { await loadData(Array.isArray(keys) ? keys : ALL_KEYS); }, [loadData]);
 
-  const runMutation = async (operation, successMessage, requireAffectedRow = false) => {
+  const runMutation = async (operation, successMessage, requireAffectedRow = false, tables) => {
     if (!supabase) { notify('ابتدا اتصال Supabase را در فایل .env تنظیم کنید.', 'error'); return false; }
     try {
       const { data: result, error } = await operation();
       if (error) { notify(explainError(error), 'error'); return false; }
       if (requireAffectedRow && !result) { notify('هیچ موردی تغییر نکرد؛ ممکن است دسترسی لازم را نداشته باشی یا مورد قبلاً تغییر کرده باشد.', 'error'); return false; }
       if (successMessage) notify(successMessage);
-      await refresh();
+      await refresh(tables);
       return true;
     } catch (error) { notify(explainError(error), 'error'); return false; }
   };
 
   // A zero-row delete must never look successful.
-  const runDelete = (operation, successMessage) => runMutation(operation, successMessage, true);
+  const runDelete = (operation, successMessage, tables) => runMutation(operation, successMessage, true, tables);
 
-  const createProject = (form) => runMutation(() => supabase.from('projects').insert({ department: form.department, title: form.title.trim(), description: form.description.trim(), status: form.status, deadline: form.deadline || null, created_by: profile.id }), 'پروژه جدید ساخته شد.');
-  const createTask = (form) => runMutation(() => supabase.from('tasks').insert({ project_id: form.project_id, title: form.title.trim(), description: form.description.trim(), priority: form.priority, status: form.status || 'todo', due_date: form.due_date || null, created_by: profile.id }), 'تسک جدید ساخته شد.');
-  const createEvent = (form) => runMutation(() => supabase.from('events').insert({ department: form.department, title: form.title.trim(), details: form.details.trim(), event_date: new Date(form.event_date).toISOString(), created_by: profile.id }), 'رویداد به تقویم اضافه شد.');
-  const createReport = (form) => runMutation(() => supabase.from('reports').insert({ reporter_id: profile.id, department: form.department, target_admin_id: form.target_admin_id || null, title: form.title.trim(), message: form.message.trim() }), 'گزارش شما به‌صورت محرمانه ثبت شد.');
+  const createProject = (form) => runMutation(() => supabase.from('projects').insert({ department: form.department, title: form.title.trim(), description: form.description.trim(), status: form.status, deadline: form.deadline || null, created_by: profile.id }), 'پروژه جدید ساخته شد.', false, ['projects']);
+  const createTask = (form) => runMutation(() => supabase.from('tasks').insert({ project_id: form.project_id, title: form.title.trim(), description: form.description.trim(), priority: form.priority, status: form.status || 'todo', due_date: form.due_date || null, created_by: profile.id }), 'تسک جدید ساخته شد.', false, ['tasks']);
+  const createEvent = (form) => runMutation(() => supabase.from('events').insert({ department: form.department, title: form.title.trim(), details: form.details.trim(), event_date: new Date(form.event_date).toISOString(), created_by: profile.id }), 'رویداد به تقویم اضافه شد.', false, ['events']);
+  const createReport = (form) => runMutation(() => supabase.from('reports').insert({ reporter_id: profile.id, department: form.department, target_admin_id: form.target_admin_id || null, title: form.title.trim(), message: form.message.trim() }), 'گزارش شما به‌صورت محرمانه ثبت شد.', false, ['reports']);
 
   const requestMembership = async (table, column, id, existingRow, messages) => {
     if (existingRow?.status === 'approved') return notify(messages.approved, 'info');
@@ -214,52 +225,54 @@ export default function App() {
       const removed = await supabase.from(table).delete().eq('id', existingRow.id);
       if (removed.error) return notify(explainError(removed.error), 'error');
     }
-    return runMutation(() => supabase.from(table).insert({ [column]: id, user_id: profile.id, status: 'pending' }), messages.sent);
+    return runMutation(() => supabase.from(table).insert({ [column]: id, user_id: profile.id, status: 'pending' }), messages.sent, false, [table === 'project_members' ? 'projectMembers' : 'taskMembers']);
   };
   const requestProject = (projectId) => requestMembership('project_members', 'project_id', projectId, data.projectMembers.find((r) => r.project_id === projectId && r.user_id === profile.id), { approved: 'عضویت شما در این پروژه تأیید شده است.', pending: 'درخواست شما هنوز بررسی نشده است.', sent: 'درخواست همکاری برای مدیر بخش ارسال شد.' });
   const requestTask = (taskId) => requestMembership('task_members', 'task_id', taskId, data.taskMembers.find((r) => r.task_id === taskId && r.user_id === profile.id), { approved: 'این تسک به شما تخصیص داده شده است.', pending: 'درخواست تسک در انتظار بررسی است.', sent: 'درخواست دریافت تسک ثبت شد.' });
 
   const decideRequest = (kind, id, status) => runMutation(
     () => supabase.from(kind === 'project' ? 'project_members' : 'task_members').update({ status, decided_by: profile.id, decided_at: new Date().toISOString() }).eq('id', id).select('id').maybeSingle(),
-    status === 'approved' ? 'درخواست تأیید شد.' : 'درخواست رد شد.', true);
+    status === 'approved' ? 'درخواست تأیید شد.' : 'درخواست رد شد.', true, [kind === 'project' ? 'projectMembers' : 'taskMembers']);
 
-  const updateTask = (taskId, patch) => runMutation(() => supabase.from('tasks').update(patch).eq('id', taskId).select('id').maybeSingle(), 'تغییرات تسک ذخیره شد.', true);
-  const updateProject = (projectId, patch) => runMutation(() => supabase.from('projects').update(patch).eq('id', projectId).select('id').maybeSingle(), 'اطلاعات پروژه به‌روزرسانی شد.', true);
-  const updateEvent = (eventId, patch) => runMutation(() => supabase.from('events').update(patch).eq('id', eventId).select('id').maybeSingle(), 'رویداد به‌روزرسانی شد.', true);
-  const updateReport = (reportId, status) => runMutation(() => supabase.from('reports').update({ status, reviewed_by: profile.id, reviewed_at: new Date().toISOString() }).eq('id', reportId).select('id').maybeSingle(), 'وضعیت گزارش تغییر کرد.', true);
+  const updateTask = (taskId, patch) => runMutation(() => supabase.from('tasks').update(patch).eq('id', taskId).select('id').maybeSingle(), 'تغییرات تسک ذخیره شد.', true, ['tasks']);
+  const updateProject = (projectId, patch) => runMutation(() => supabase.from('projects').update(patch).eq('id', projectId).select('id').maybeSingle(), 'اطلاعات پروژه به‌روزرسانی شد.', true, ['projects']);
+  const updateEvent = (eventId, patch) => runMutation(() => supabase.from('events').update(patch).eq('id', eventId).select('id').maybeSingle(), 'رویداد به‌روزرسانی شد.', true, ['events']);
+  const updateReport = (reportId, status) => runMutation(() => supabase.from('reports').update({ status, reviewed_by: profile.id, reviewed_at: new Date().toISOString() }).eq('id', reportId).select('id').maybeSingle(), 'وضعیت گزارش تغییر کرد.', true, ['reports']);
 
   // Optimistic: the card moves instantly; if the database refuses, it snaps back.
   const moveTask = async (taskId, status) => {
     const before = data.tasks.find((t) => t.id === taskId);
     if (!before || before.status === status) return;
     setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === taskId ? { ...t, status } : t)) }));
-    const ok = await runMutation(() => supabase.from('tasks').update({ status }).eq('id', taskId).select('id').maybeSingle(), 'وضعیت تسک تغییر کرد.', true);
+    const ok = await runMutation(() => supabase.from('tasks').update({ status }).eq('id', taskId).select('id').maybeSingle(), 'وضعیت تسک تغییر کرد.', true, ['tasks']);
     if (!ok) setData((d) => ({ ...d, tasks: d.tasks.map((t) => (t.id === taskId ? before : t)) }));
   };
 
-  const deleteProject = (id) => runDelete(() => supabase.from('projects').delete().eq('id', id).select('id').maybeSingle(), 'پروژه و تسک‌ها و عضویت‌های وابسته حذف شدند.');
-  const deleteTask = (id) => runDelete(() => supabase.from('tasks').delete().eq('id', id).select('id').maybeSingle(), 'تسک حذف شد.');
-  const deleteEvent = (id) => runDelete(() => supabase.from('events').delete().eq('id', id).select('id').maybeSingle(), 'رویداد حذف شد.');
-  const deleteReport = (id) => runDelete(() => supabase.from('reports').delete().eq('id', id).select('id').maybeSingle(), 'گزارش حذف شد.');
+  const deleteProject = (id) => runDelete(() => supabase.from('projects').delete().eq('id', id).select('id').maybeSingle(), 'پروژه و تسک‌ها و عضویت‌های وابسته حذف شدند.', ['projects', 'tasks', 'projectMembers', 'taskMembers']);
+  const deleteTask = (id) => runDelete(() => supabase.from('tasks').delete().eq('id', id).select('id').maybeSingle(), 'تسک حذف شد.', ['tasks', 'taskMembers']);
+  const deleteEvent = (id) => runDelete(() => supabase.from('events').delete().eq('id', id).select('id').maybeSingle(), 'رویداد حذف شد.', ['events']);
+  const deleteReport = (id) => runDelete(() => supabase.from('reports').delete().eq('id', id).select('id').maybeSingle(), 'گزارش حذف شد.', ['reports']);
   const clearDoneTasks = (projectId) => runMutation(async () => {
     const result = await supabase.from('tasks').delete().eq('project_id', projectId).eq('status', 'done').select('id');
     if (!result.error && !(result.data || []).length) return { data: null, error: { message: 'تسک تکمیل‌شده‌ای برای پاک‌سازی وجود نداشت.' } };
     return result;
-  }, 'تسک‌های تکمیل‌شده پاک شدند.');
+  }, 'تسک‌های تکمیل‌شده پاک شدند.', false, ['tasks', 'taskMembers']);
 
   // Each operation calls its database function and transparently falls back to guarded table writes
   // if the API layer cannot see that function (see src/lib/memberOps.js).
   const ops = createMemberOps(supabase, profile, () => data);
-  const assignProjectMember = (projectId, userId) => runMutation(() => ops.assignProjectMember(projectId, userId), 'عضو مستقیماً به پروژه اضافه شد.');
-  const assignTaskMember = (taskId, userId) => runMutation(() => ops.assignTaskMember(taskId, userId), 'عضو مستقیماً به تسک تخصیص داده شد.');
-  const removeProjectMember = (projectId, userId) => runMutation(() => ops.removeProjectMember(projectId, userId), 'عضو و تخصیص‌های تسک او از این پروژه برداشته شد.');
-  const removeTaskMember = (taskId, userId) => runMutation(() => ops.removeTaskMember(taskId, userId), 'عضو از این تسک خارج شد.');
-  const deactivateMember = (userId) => runMutation(() => ops.deactivateMember(userId), 'دسترسی عضو بسته شد.');
-  const reactivateMember = (userId) => runMutation(() => ops.reactivateMember(userId), 'دسترسی عضو بازگردانده شد.');
+  const MEMBERSHIPS = ['projectMembers', 'taskMembers'];
+  const PEOPLE = ['profiles', 'publicMembers'];
+  const assignProjectMember = (projectId, userId) => runMutation(() => ops.assignProjectMember(projectId, userId), 'عضو مستقیماً به پروژه اضافه شد.', false, ['projectMembers']);
+  const assignTaskMember = (taskId, userId) => runMutation(() => ops.assignTaskMember(taskId, userId), 'عضو مستقیماً به تسک تخصیص داده شد.', false, MEMBERSHIPS);
+  const removeProjectMember = (projectId, userId) => runMutation(() => ops.removeProjectMember(projectId, userId), 'عضو و تخصیص‌های تسک او از این پروژه برداشته شد.', false, MEMBERSHIPS);
+  const removeTaskMember = (taskId, userId) => runMutation(() => ops.removeTaskMember(taskId, userId), 'عضو از این تسک خارج شد.', false, ['taskMembers']);
+  const deactivateMember = (userId) => runMutation(() => ops.deactivateMember(userId), 'دسترسی عضو بسته شد.', false, [...PEOPLE, ...MEMBERSHIPS]);
+  const reactivateMember = (userId) => runMutation(() => ops.reactivateMember(userId), 'دسترسی عضو بازگردانده شد.', false, PEOPLE);
   const deleteMemberPermanently = (userId) => runMutation(() => ops.deleteMemberPermanently(userId), 'عضو برای همیشه حذف شد.');
-  const changeMemberDepartment = (userId, department) => runMutation(() => ops.changeMemberDepartment(userId, department), 'عضو به بخش جدید منتقل شد.');
-  const assignAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت بخش اعطا شد.', true);
-  const revokeAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت لغو شد.', true);
+  const changeMemberDepartment = (userId, department) => runMutation(() => ops.changeMemberDepartment(userId, department), 'عضو به بخش جدید منتقل شد.', false, PEOPLE);
+  const assignAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'department_admin', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت بخش اعطا شد.', true, PEOPLE);
+  const revokeAdmin = (userId, department) => runMutation(() => supabase.from('profiles').update({ role: 'member', department }).eq('id', userId).select('id').maybeSingle(), 'دسترسی مدیریت لغو شد.', true, PEOPLE);
 
   const commonProps = {
     profile, data, notify, refresh, openDialog: setDialog, confirmAction: setConfirmDialog, setActivePage,
@@ -287,20 +300,22 @@ export default function App() {
 
   if (!session || !profile) {
     return <>
-      <Landing members={landingMembers} openAuth={setAuthMode} connectionReady={isSupabaseConfigured} />
-      {authMode && <AuthModal mode={authMode} setMode={setAuthMode} close={() => setAuthMode(null)} notify={notify} />}
+      <Suspense fallback={<LoadingScreen />}>
+        <Landing members={landingMembers} openAuth={setAuthMode} connectionReady={isSupabaseConfigured} />
+        {authMode && <AuthModal mode={authMode} setMode={setAuthMode} close={() => setAuthMode(null)} notify={notify} />}
+      </Suspense>
       {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
     </>;
   }
 
-  const Page = { overview: OverviewPage, projects: ProjectsPage, tasks: TasksPage, calendar: CalendarPage, teams: TeamsPage, reports: ReportsPage, members: MembersPage, settings: SettingsPage }[activePage] || OverviewPage;
+  const Page = PAGE_COMPONENTS[activePage] || OverviewPage;
   const allowed = activePage !== 'members' || profile.role !== 'member';
 
   return <div className="nv-app">
     <Sidebar activePage={activePage} setActivePage={setActivePage} profile={profile} mobileNav={mobileNav} setMobileNav={setMobileNav} signOut={signOut} badges={badges} />
     {mobileNav && <button className="nv-scrim" aria-label="بستن منو" onClick={() => setMobileNav(false)} />}
     <main className="nv-main">
-      <Topbar profile={profile} dataLoading={dataLoading} setMobileNav={setMobileNav} onRefresh={refresh} activePage={activePage} />
+      <Topbar profile={profile} dataLoading={dataLoading} setMobileNav={setMobileNav} onRefresh={() => refresh()} activePage={activePage} onProfile={() => setActivePage('settings')} />
       {profileError && <div className="inline-error">{profileError}</div>}
       {dataIssues.length > 0 && <div className="inline-error" role="alert">
         <strong>بخشی از داده‌ها بارگذاری نشد: {dataIssues.map((i) => i.label).join('، ')}.</strong>{' '}
@@ -308,14 +323,18 @@ export default function App() {
         <span dir="ltr" style={{ display: 'block', opacity: 0.75, fontSize: '0.8em', marginTop: 4 }}>{dataIssues.map((i) => `${i.key}: ${i.code || 'error'} ${i.message}`).join(' | ')}</span>
         {' '}<button className="button button-small button-ghost" onClick={refresh}>تلاش دوباره</button>
       </div>}
-      <div className="nv-page">
+      <div className="nv-page" data-page={allowed ? activePage : 'overview'}>
         <ErrorBoundary resetKey={activePage}>
-          <div key={activePage} className="nv-page-enter">{allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
+          <Suspense fallback={<PageSkeleton />}>
+            <div key={activePage} className="nv-page-enter">{!dataReady ? <PageSkeleton /> : allowed ? <Page {...commonProps} /> : <OverviewPage {...commonProps} />}</div>
+          </Suspense>
         </ErrorBoundary>
       </div>
-      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.5.0 · فضای یکپارچه تیم</span></footer>
+      <footer className="nv-footer"><span>NOWERA WORKSPACE</span><span>یک چشم‌انداز، چندین قدرت.</span><span>v1.5.1 · فضای یکپارچه تیم</span></footer>
     </main>
-    {dialog && <ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} />}
+    <BottomNav activePage={activePage} setActivePage={setActivePage} profile={profile} badges={badges} onSignOut={signOut} />
+    <PullToRefresh onRefresh={() => refresh()} />
+    {dialog && <Suspense fallback={null}><ActionDialog key={`${dialog.type}-${dialog.record?.id || 'new'}`} dialog={dialog} close={() => setDialog(null)} profile={profile} data={data} handlers={{ createProject, createTask, createEvent, createReport, updateProject, updateTask, updateEvent }} /></Suspense>}
     {confirmDialog && <ConfirmDialog dialog={confirmDialog} close={() => setConfirmDialog(null)} />}
     {toast && <Toast toast={toast} onClose={() => setToast(null)} />}
   </div>;

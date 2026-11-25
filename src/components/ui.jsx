@@ -1,11 +1,11 @@
 import React, { useState } from 'react';
-import { AlertCircle, Check, CircleHelp, Trash2, X } from 'lucide-react';
+import { AlertCircle, Check, CircleHelp, RefreshCw, Trash2, X } from 'lucide-react';
 import { getDepartment, initials, toFaDigits } from '../lib/helpers';
 import { PROJECT_STATUS, TASK_STATUS } from '../lib/helpers';
-import { useCountUp } from '../lib/hooks';
+import { useCountUp, useModalBehavior, usePullToRefresh } from '../lib/hooks';
 
 export function BrandMark({ small = false }) {
-  return <div className={`brand-lockup ${small ? 'brand-lockup-small' : ''}`}><img src="/brands/nowera-symbol.png" alt="NOWERA" width="44" height="41" /><div><b>NOWERA</b><span>MANAGEMENT SPACE</span></div></div>;
+  return <div className={`brand-lockup ${small ? 'brand-lockup-small' : ''}`}><img src="/brands/nowera-symbol.webp" alt="NOWERA" width="44" height="41" /><div><b>NOWERA</b><span>MANAGEMENT SPACE</span></div></div>;
 }
 
 export function Avatar({ profile, size = 'medium' }) {
@@ -13,8 +13,8 @@ export function Avatar({ profile, size = 'medium' }) {
   return <div className={`avatar avatar-${size}`} style={{ '--dept-color': department.color }}>{initials(profile?.full_name)}</div>;
 }
 
-export function PageHeader({ eyebrow, title, description, action, badge }) {
-  return <header className="nv-page-head nv-rise">
+export function PageHeader({ eyebrow, title, description, action, badge, fab = false }) {
+  return <header className={`nv-page-head nv-rise ${fab ? 'has-fab' : ''}`}>
     <div className="nv-page-head-copy">
       <span className="nv-eyebrow"><i />{eyebrow}</span>
       <h1>{title}{badge && <span className="nv-head-badge">{badge}</span>}</h1>
@@ -73,6 +73,7 @@ export function Toast({ toast, onClose }) {
 
 export function ConfirmDialog({ dialog, close }) {
   const [busy, setBusy] = useState(false);
+  useModalBehavior(close, busy);
   const confirm = async () => {
     if (busy) return;
     setBusy(true);
@@ -111,4 +112,22 @@ export class ErrorBoundary extends React.Component {
     if (!this.state.error) return this.props.children;
     return <div className="nv-card nv-error-card"><AlertCircle size={26} /><h3>مشکلی در نمایش این صفحه پیش آمد</h3><p>اطلاعات شما سالم است. صفحه را دوباره بارگذاری کن یا به بخش دیگری برو.</p><button className="button button-primary" onClick={() => window.location.reload()}>بارگذاری دوباره</button></div>;
   }
+}
+
+// Skeleton shown while the first data load is in flight (avoids a flash of "empty" screens).
+export function PageSkeleton() {
+  return <div className="nv-stack nv-skeleton" aria-busy="true" aria-label="در حال بارگذاری">
+    <div className="nv-skel is-title" />
+    <div className="nv-stats">{[0, 1, 2, 3].map((i) => <div key={i} className="nv-skel is-stat" />)}</div>
+    <div className="nv-skel is-card" /><div className="nv-skel is-card" />
+  </div>;
+}
+
+export function PullToRefresh({ onRefresh }) {
+  const { pull, busy, threshold } = usePullToRefresh(onRefresh);
+  if (!pull && !busy) return null;
+  const ready = pull >= threshold;
+  return <div className={`nv-ptr ${busy ? 'is-busy' : ''} ${ready ? 'is-ready' : ''}`} style={{ transform: `translate(-50%, ${busy ? 18 : pull - 36}px)` }} aria-hidden="true">
+    <RefreshCw size={18} style={busy ? undefined : { transform: `rotate(${Math.min(pull / threshold, 1) * 270}deg)` }} />
+  </div>;
 }

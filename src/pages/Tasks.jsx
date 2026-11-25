@@ -39,7 +39,7 @@ export default function TasksPage(props) {
 
   return <div className="nv-stack">
     <PageHeader eyebrow="TASK CONTROL / EXECUTION" title="مدیریت تسک‌ها" description="مسئولیت‌ها را شفاف کن و با کشیدن کارت‌ها، وضعیت تسک‌ها را تغییر بده."
-      action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'task' })}><Plus size={16} /> تعریف تسک</button>} />
+      fab action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'task' })}><Plus size={16} /> تعریف تسک</button>} />
 
     <div className="nv-toolbar nv-rise" style={{ '--i': 1 }}>
       <label className="nv-search"><Search size={17} /><input value={query} onChange={(e) => setQuery(e.target.value)} placeholder="جست‌وجوی تسک یا پروژه…" aria-label="جست‌وجوی تسک" /></label>

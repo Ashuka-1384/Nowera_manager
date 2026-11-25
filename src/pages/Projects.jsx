@@ -25,7 +25,7 @@ export default function ProjectsPage(props) {
 
   return <div className="nv-stack">
     <PageHeader eyebrow="PROJECT HUB / PORTFOLIO" title="پروژه‌های نَوِرا" description="پروژه‌ها، اعضا و مسیر پیشرفت را از یک نمای یکپارچه مدیریت کن."
-      action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'project' })}><Plus size={16} /> پروژه جدید</button>} />
+      fab action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'project' })}><Plus size={16} /> پروژه جدید</button>} />
 
     <div className="nv-toolbar nv-rise" style={{ '--i': 1 }}>
       <label className="nv-search"><Search size={17} /><input placeholder="جست‌وجوی نام یا شرح پروژه…" value={query} onChange={(e) => setQuery(e.target.value)} aria-label="جست‌وجوی پروژه" /></label>

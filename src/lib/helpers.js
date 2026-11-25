@@ -1,7 +1,7 @@
 export const DEPARTMENTS = [
-  { id: 'Lumen', name: 'لومن', english: 'Lumen', tagline: 'تولید محتوا و تبلیغات', color: '#a855f7', glow: 'rgba(168,85,247,.18)', logo: '/brands/lumen.jpg' },
-  { id: 'Technoplus', name: 'تکنوپلاس', english: 'Technoplus', tagline: 'توسعه نرم‌افزار و خدمات فنی', color: '#22b8f0', glow: 'rgba(34,184,240,.18)', logo: '/brands/technoplus.jpg' },
-  { id: 'Atlas', name: 'اطلس', english: 'Atlas', tagline: 'ترید و خدمات مالی', color: '#e9b85b', glow: 'rgba(233,184,91,.18)', logo: '/brands/atlas.jpg' },
+  { id: 'Lumen', name: 'لومن', english: 'Lumen', tagline: 'تولید محتوا و تبلیغات', color: '#a855f7', glow: 'rgba(168,85,247,.18)', logo: '/brands/lumen.webp' },
+  { id: 'Technoplus', name: 'تکنوپلاس', english: 'Technoplus', tagline: 'توسعه نرم‌افزار و خدمات فنی', color: '#22b8f0', glow: 'rgba(34,184,240,.18)', logo: '/brands/technoplus.webp' },
+  { id: 'Atlas', name: 'اطلس', english: 'Atlas', tagline: 'ترید و خدمات مالی', color: '#e9b85b', glow: 'rgba(233,184,91,.18)', logo: '/brands/atlas.webp' },
   { id: 'Horizen', name: 'هورایزن', english: 'Horizen', tagline: 'طراحی سه‌بعدی و تصویرسازی', color: '#647cff', glow: 'rgba(100,124,255,.18)', logo: '/brands/horizen.svg' },
 ];
 

@@ -11,7 +11,7 @@ export default function ReportsPage({ profile, data, openDialog, updateReport, d
   const list = data.reports.filter((r) => tab === 'all' || r.status === tab);
   return <div className="nv-stack">
     <PageHeader eyebrow="TRUST / FEEDBACK CHANNEL" title="گزارش و بازخورد" description="اگر درباره‌ی روند کار یا عملکرد مدیریتی مسئله‌ای وجود دارد، گزارش را محرمانه و مستقیم ثبت کن."
-      action={<button className="button button-primary" onClick={() => openDialog({ type: 'report' })}><Send size={16} /> ثبت گزارش</button>} />
+      fab action={<button className="button button-primary" onClick={() => openDialog({ type: 'report' })}><Send size={16} /> ثبت گزارش</button>} />
     <div className="nv-banner nv-rise" style={{ '--i': 1 }}>
       <span className="nv-banner-icon"><ShieldCheck size={22} /></span>
       <div><strong>حریم خصوصی گزارش‌دهنده</strong><p>گزارش‌ها فقط برای ثبت‌کننده و مدیر اصلی قابل مشاهده‌اند؛ مدیر بخش به گزارش ثبت‌شده درباره‌ی خودش دسترسی ندارد.</p></div>

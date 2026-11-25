@@ -8,6 +8,7 @@ import {
   DEPARTMENTS, ROLE_LABELS, normalizePhone, phoneToAuthEmail, getDepartment, initials, toFaDigits,
 } from '../lib/helpers';
 import { BrandMark } from './ui';
+import { useModalBehavior } from '../lib/hooks';
 
 export function Landing({ members, openAuth, connectionReady }) {
   const [activeDept, setActiveDept] = useState('Technoplus');
@@ -24,7 +25,7 @@ export function Landing({ members, openAuth, connectionReady }) {
         <div className="hero-buttons"><button className="button button-primary button-large" onClick={() => openAuth('signup')}>شروع همکاری <ArrowLeft size={17} /></button><a href="#departments" className="button button-ghost button-large">کشف تیم‌ها <ChevronDown size={16} /></a></div>
         <div className="hero-proof"><div className="proof-avatars">{['N','L','T','A'].map((s, i) => <span key={s} style={{ '--i': i }}>{s}</span>)}</div><div><strong>{members.length ? toFaDigits(members.length) : '۴'} <small>+</small></strong><span>تخصص‌های مکمل، یک تیم</span></div><div className="proof-divider" /><div><strong>۰۱</strong><span>چشم‌انداز مشترک</span></div></div>
       </div>
-      <div className="hero-visual"><div className="visual-grid" /><div className="orbit orbit-a" /><div className="orbit orbit-b" /><div className="hero-logo-frame"><img src="/brands/nowera.png" alt="نشان نَوِرا" /></div><div className="floating-card float-card-top"><span className="float-spark"><Sparkles size={16} /></span><div><b>One Vision</b><small>هم‌جهت، هم‌قدم</small></div></div><div className="floating-card float-card-bottom"><div className="mini-bars"><i /><i /><i /><i /></div><div><b>Multiple Powers</b><small>چهار بازوی تخصصی</small></div></div><span className="visual-caption">EST. FOR WHAT'S NEXT</span></div>
+      <div className="hero-visual"><div className="visual-grid" /><div className="orbit orbit-a" /><div className="orbit orbit-b" /><div className="hero-logo-frame"><img src="/brands/nowera.webp" alt="نشان نَوِرا" /></div><div className="floating-card float-card-top"><span className="float-spark"><Sparkles size={16} /></span><div><b>One Vision</b><small>هم‌جهت، هم‌قدم</small></div></div><div className="floating-card float-card-bottom"><div className="mini-bars"><i /><i /><i /><i /></div><div><b>Multiple Powers</b><small>چهار بازوی تخصصی</small></div></div><span className="visual-caption">EST. FOR WHAT'S NEXT</span></div>
       <div className="hero-bottom-line"><span>01 / 04</span><div><i /></div><span>SCROLL TO EXPLORE</span></div>
     </section>
     <section className="values-section"><div className="section-heading"><span className="section-kicker">HOW WE WORK</span><h2>ساختار منظم برای <span>ایده‌های بزرگ</span></h2><p>از هماهنگی روزانه تا تحویل پروژه؛ هر بخش ابزار مناسب خودش را دارد و در عین حال با بقیه تیم‌ها در ارتباط است.</p></div><div className="values-grid"><ValueCard number="01" icon={<Target />} title="هدف مشترک" desc="همه تیم‌ها در یک مسیر و با اولویت‌های شفاف حرکت می‌کنند." /><ValueCard number="02" icon={<Layers3 />} title="تخصص مستقل" desc="هر بخش هویت، فرآیند و فضای کاری متناسب با خودش را دارد." /><ValueCard number="03" icon={<BarChart3 />} title="پیشرفت قابل پیگیری" desc="پروژه، تسک، ضرب‌الاجل و رویدادها در یک نمای یکپارچه." /></div></section>
@@ -54,6 +55,7 @@ export function AuthModal({ mode, setMode, close, notify }) {
   const [form, setForm] = useState({ full_name: '', phone: '', password: '', department: 'Technoplus' });
   const [busy, setBusy] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
+  useModalBehavior(close, busy);
   const isSignup = mode === 'signup';
   const update = (key, value) => setForm((prev) => ({ ...prev, [key]: value }));
   const submit = async (event) => {
@@ -96,7 +98,7 @@ export function AuthModal({ mode, setMode, close, notify }) {
       setBusy(false);
     }
   };
-  return <div className="modal-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}><section className="auth-modal">
+  return <div className="modal-scrim" onMouseDown={(e) => { if (e.target === e.currentTarget && !busy) close(); }}><section className="auth-modal" role="dialog" aria-modal="true" aria-label={mode === 'signup' ? 'عضویت' : 'ورود'}>
     <button className="modal-close" onClick={close} aria-label="بستن"><X size={18} /></button><div className="auth-modal-brand"><BrandMark /><span className="auth-vertical-line" /></div>
     <div className="auth-heading"><span className="section-kicker">{isSignup ? 'BECOME A PART OF NOWERA' : 'WELCOME BACK'}</span><h2>{isSignup ? 'به نَوِرا خوش آمدی.' : 'دوباره خوش آمدی.'}</h2><p>{isSignup ? 'پروفایل خودت را بساز و مسیر همکاری را شروع کن.' : 'با شماره موبایل و رمز عبورت وارد فضای کاری شو.'}</p></div>
     <form className="auth-form" onSubmit={submit}>

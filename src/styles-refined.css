@@ -8,7 +8,7 @@
 /* Fonts are loaded from index.html (non-blocking, display=swap). */
 
 :root {
-  font-family: 'Estedad', 'Vazirmatn', 'DM Sans', sans-serif;
+  font-family: 'Estedad Variable', 'Vazirmatn', Tahoma, sans-serif;
   color: #f5f7fb;
   background: #080b12;
   --bg: #080b12;
@@ -26,7 +26,7 @@
   --green: #65e6bd;
   --red: #ff8193;
   --radius: 20px;
-  --font-latin: 'DM Sans', 'Estedad', sans-serif;
+  --font-latin: 'DM Sans Variable', 'Estedad Variable', sans-serif;
   --glass-bg: rgba(255, 255, 255, .045);
   --glass-bg-strong: rgba(255, 255, 255, .07);
   --glass-border: rgba(226, 235, 255, .12);
@@ -39,7 +39,7 @@ body,
 button,
 input,
 textarea,
-select { font-family: 'Estedad', 'Vazirmatn', 'DM Sans', sans-serif; }
+select { font-family: 'Estedad Variable', 'Vazirmatn', Tahoma, sans-serif; }
 body {
   min-width: 320px;
   background:

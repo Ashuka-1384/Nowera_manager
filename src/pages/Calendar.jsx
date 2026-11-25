@@ -52,7 +52,7 @@ export default function CalendarPage({ profile, data, openDialog, deleteEvent, c
 
   return <div className="nv-stack">
     <PageHeader eyebrow="TEAM CALENDAR / SCHEDULE" title="تقویم نَوِرا" description="برنامه‌ی تیم‌ها را در نمای ماهانه ببین و جزئیات هر روز را کنار تقویم دنبال کن."
-      action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'event', date: selected })}><CalendarPlus size={16} /> ثبت رویداد</button>} />
+      fab action={manager && <button className="button button-primary" onClick={() => openDialog({ type: 'event', date: selected })}><CalendarPlus size={16} /> ثبت رویداد</button>} />
 
     <div className="nv-toolbar nv-rise" style={{ '--i': 1 }}>
       <div className="nv-month-title"><span className="nv-dot-icon"><CalendarDays size={18} /></span><div><small>برنامه‌ریزی ماهانه</small><strong>{F.monthName.format(month)}</strong></div></div>

@@ -50,7 +50,7 @@ export default function OverviewPage({ profile, data, setActivePage, decideReque
         <ProgressRing pct={overall.pct}><strong>{toFaDigits(overall.pct)}٪</strong><small>پیشرفت کلی</small></ProgressRing>
         <div className="nv-hero-legend"><span><i className="is-done" />{toFaDigits(overall.done)} انجام‌شده</span><span><i />{toFaDigits(overall.total - overall.done)} باقی‌مانده</span></div>
       </div>
-      <img className="nv-hero-mark" src="/brands/nowera.png" alt="" aria-hidden="true" loading="lazy" decoding="async" />
+      <img className="nv-hero-mark" src="/brands/nowera.webp" alt="" aria-hidden="true" loading="lazy" decoding="async" />
     </section>
 
     <div className="nv-stats">

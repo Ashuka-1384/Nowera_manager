@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { ArrowLeft, CalendarDays, Check, ClipboardList, FolderKanban, MessageSquareWarning, Pencil, Send, ShieldCheck, X } from 'lucide-react';
+import { useModalBehavior } from '../lib/hooks';
 import { DEPARTMENTS, PROJECT_STATUS, PRIORITY, ROLE_LABELS, TASK_STATUS, getDepartment, isManager } from '../lib/helpers';
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -25,6 +26,7 @@ export default function ActionDialog({ dialog, close, profile, data, handlers })
     message: '', target_admin_id: '',
   }));
   const [busy, setBusy] = useState(false);
+  useModalBehavior(close, busy);
   const update = (key, value) => setForm((old) => ({ ...old, [key]: value }));
   const projects = data.projects.filter((p) => isManager(profile, p.department));
   const admins = data.profiles.filter((m) => m.is_active && m.role !== 'member');
